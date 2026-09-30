@@ -1,0 +1,264 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Design tradeoffs: latency, throughput and resilience · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><script defer src="app.js"></script></head><body data-page="06-delivery-and-recovery.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Architecture · messages · code · failures</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Kafka, Rust, recovery…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 17 · source-backed walkthrough</p><h1>Design tradeoffs: latency, throughput and resilience</h1><p class="intro">A system design chooses where to wait, buffer, replicate, replay and publish. These choices determine which failures preserve data, which operations remain available, and how throughput interacts with committed-result latency.</p><nav class="toc" aria-label="On this page"><a href="#section-1">Compare the actual recovery authorities</a><a href="#section-2">Latency has several clocks</a><a href="#section-3">Throughput is limited by the slowest sustainable stage</a><a href="#section-4">Durability, availability and failure detection</a><a href="#section-5">Recovery-time and retention budgets</a><a href="#section-6">Failure experiments that validate the design</a></nav></div><section id="section-1"><p class="section-number">01</p><h2>Compare the actual recovery authorities</h2><p>Exactly-once describes an observable effect within a stated boundary, not the number of times code executes. Retries and re-execution can happen internally. The protocol must ensure that repeated physical attempts produce one committed logical result.</p><p>At-most-once consumer processing commits progress before doing work, risking omission after failure. At-least-once does work before recording progress, risking duplication after failure. Atomic commit or destination deduplication closes that gap for the specified output boundary.</p><div class="table-scroll"><table><thead><tr><th>System</th><th>Recoverable progress / state</th><th>Distributed responsibility and EOS scope</th></tr></thead><tbody><tr><td>Kafka</td><td>Partition replicas; __consumer_offsets; __transaction_state; metadata quorum</td><td>Replicated logs and transactions across Kafka participants. External side effects need another protocol.</td></tr><tr><td>Kafka Streams</td><td>Input offsets + transactional changelog/output; local store restored from changelog</td><td>Application task reassignment; Kafka EOS when configured, excluding arbitrary external calls.</td></tr><tr><td>Kafka Connect</td><td>Config / source-offset / status topics; sink group offsets</td><td>Worker task assignment. Source EOS has a dedicated transaction path; sink effects depend on destination connector.</td></tr><tr><td>Flink + Kafka connector</td><td>Completed checkpoint of split offsets, state and sink receipts</td><td>Task failover and replay. Kafka output transactions complete after checkpoint, separately from optional source group commits.</td></tr><tr><td>Spark Structured Streaming</td><td>Offset logs, commit logs, versioned state stores</td><td>Driver / task retry and replay. Built-in Kafka output remains at-least-once.</td></tr><tr><td>Iceberg</td><td>Catalog metadata state, snapshots, manifests and files</td><td>Atomic table publication; physical durability depends on catalog and storage.</td></tr><tr><td>DataFusion</td><td>Host-supplied input and output persistence</td><td>In-process query execution; distributed scheduling / recovery is the embedding host responsibility.</td></tr><tr><td>Comet</td><td>Spark attempt and sink / checkpoint contracts</td><td>Native execution inside Spark; preserves the host recovery envelope rather than inventing another one.</td></tr><tr><td>Rust / Arrow</td><td>Local memory ownership only</td><td>Language / format primitives; no distributed durability guarantee by themselves.</td></tr></tbody></table></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#streams-commit">streams-commit</a> <a class="cite" href="07-code-evidence.html#connect-source-eos">connect-source-eos</a> <a class="cite" href="07-code-evidence.html#fk-state">fk-state</a> <a class="cite" href="07-code-evidence.html#spark-kafka">spark-kafka</a> <a class="cite" href="07-code-evidence.html#iceberg-snapshot">iceberg-snapshot</a> <a class="cite" href="07-code-evidence.html#df-execute">df-execute</a> <a class="cite" href="07-code-evidence.html#comet-jni">comet-jni</a></div></section><section id="section-2"><p class="section-number">02</p><h2>Latency has several clocks</h2><p>Measure at least producer acknowledgement latency, processing latency, committed-output visibility latency and query freshness. A record can be processed quickly while its output waits in an uncommitted transaction or unpublished table snapshot. A watermark can delay a window result after all CPU work is otherwise ready.</p><p>For a checkpoint-gated sink, a useful model is visibility latency ≈ ingest / fetch delay + processing / queueing + wait for checkpoint cut + checkpoint completion + external commit / visibility delay. These terms can overlap in a real implementation; use a trace to avoid double-counting. With uniformly distributed arrivals and a regular checkpoint interval C, expected wait for the next cut is approximately C/2, not a guaranteed bound.</p><p>Example: C=10 seconds gives about 5 seconds of average cut wait before checkpoint and sink completion overhead. Reducing CPU processing from 50 ms to 10 ms saves 40 ms but barely changes that 5-second term. Shorter checkpoints may improve freshness while increasing snapshot, transaction and small-file overhead.</p><figure class="diagram" id="06-delivery-and-recovery-2-1"><figcaption><h3>The path to an externally visible result</h3><p>This is a latency budget, not a mandatory serial call graph. Actual stages overlap and must be measured.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/06-delivery-and-recovery-2-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/06-delivery-and-recovery-2-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The path to an externally visible result"><img src="diagrams/06-delivery-and-recovery-2-1.svg" alt="The path to an externally visible result. This is a latency budget, not a mandatory serial call graph. Actual stages overlap and must be measured." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#flink-checkpoint">flink-checkpoint</a> <a class="cite" href="07-code-evidence.html#fk-commit">fk-commit</a> <a class="cite" href="07-code-evidence.html#iceberg-flink">iceberg-flink</a> <a class="cite" href="07-code-evidence.html#spark-end">spark-end</a></div></figure><div class="table-scroll"><table><thead><tr><th>Goal</th><th>Useful measure</th><th>Misleading substitute</th></tr></thead><tbody><tr><td>Fast ingestion</td><td>Produce p50/p95/p99 and failed / retried sends</td><td>Calling send quickly.</td></tr><tr><td>Fast event processing</td><td>Source timestamp to operator result with queue time</td><td>Only user-function CPU time.</td></tr><tr><td>Fast committed output</td><td>Event timestamp to read_committed fetch / published snapshot</td><td>Kafka produce acknowledgement inside an open transaction.</td></tr><tr><td>Fast query</td><td>Planning, scan, shuffle, execution and result materialization</td><td>Native operator speed without storage and scheduling time.</td></tr><tr><td>Fast recovery</td><td>Detection + allocation + restore + catch-up</td><td>Restarting the process while backlog keeps growing.</td></tr></tbody></table></div></section><section id="section-3"><p class="section-number">03</p><h2>Throughput is limited by the slowest sustainable stage</h2><p>For stages expressed in the same units, sustainable throughput is bounded by the minimum effective stage capacity after parallelism, skew and shared-resource contention. Adding workers only helps a parallelizable bottleneck; it cannot make one ordered hot key execute in parallel without changing the computation.</p><p>Little's Law gives average in-flight work L ≈ arrival rate λ × average residence time W for a stable system. At 100,000 records/s and 2 seconds residence time, about 200,000 records are in flight. At 1 KiB per record, payload alone is about 195 MiB before object, index, buffer and state overhead.</p><p>If capacity is 80,000 records/s while arrival is 100,000, backlog grows by 20,000 records/s. More buffering delays failure but does not restore stability. Admission control, backpressure, load shedding or additional effective capacity must change that balance.</p><figure class="diagram" id="06-delivery-and-recovery-3-1"><figcaption><h3>Overload policy determines failure behavior</h3><p>A bounded queue creates a decision point. An unbounded queue defers the decision to memory exhaustion.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/06-delivery-and-recovery-3-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/06-delivery-and-recovery-3-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Overload policy determines failure behavior"><img src="diagrams/06-delivery-and-recovery-3-1.svg" alt="Overload policy determines failure behavior. A bounded queue creates a decision point. An unbounded queue defers the decision to memory exhaustion." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#flink-input">flink-input</a> <a class="cite" href="07-code-evidence.html#df-memory">df-memory</a> <a class="cite" href="07-code-evidence.html#kafka-producer">kafka-producer</a></div></figure><div class="table-scroll"><table><thead><tr><th>Knob</th><th>Why it helps throughput</th><th>Why it can hurt latency / recovery</th></tr></thead><tbody><tr><td>Bigger producer / fetch / Arrow batches</td><td>Amortize per-request and per-batch overhead</td><td>Wait to fill, more live memory, longer processing bursts.</td></tr><tr><td>More partitions / tasks</td><td>Spread independent work</td><td>Scheduler overhead, channels, metadata, shuffle and skew.</td></tr><tr><td>Larger queues</td><td>Absorb short bursts</td><td>Higher residence time; larger in-flight recovery footprint.</td></tr><tr><td>Compression</td><td>Fewer network / storage bytes</td><td>CPU and decompression work; codec / data dependent.</td></tr><tr><td>Spill to disk</td><td>Continue beyond memory limit</td><td>More I/O, longer tail and disk-capacity dependence.</td></tr><tr><td>Native vector execution</td><td>Less per-row object and interpretation overhead</td><td>Conversion / FFI and memory ownership costs; not all operators eligible.</td></tr></tbody></table></div></section><section id="section-4"><p class="section-number">04</p><h2>Durability, availability and failure detection</h2><p>A replicated write can wait for stronger evidence and therefore reject or stall under replica loss. Kafka acks=all with minimum ISR makes this tradeoff explicit. The catalog similarly needs its commit authority available to publish new snapshots even if file storage remains reachable.</p><p>A network partition can leave two processes believing they are the owner. Heartbeats / leases let the control plane suspect an owner, but storage-enforced fencing prevents the stale one from committing. Tight timeouts improve detection while increasing false failover under GC pauses, CPU starvation or transient congestion.</p><p>Retry policy also needs a budget. Unbounded retries during dependency failure increase load on the failing dependency and retain memory. Exponential backoff and jitter can spread retries, but a deadline and an explicit unknown-outcome state remain necessary for business correctness.</p><figure class="diagram" id="06-delivery-and-recovery-4-1"><figcaption><h3>Detection must be followed by enforced ownership</h3><p>The coordinator replacing an owner does not by itself stop an old process that is still alive.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/06-delivery-and-recovery-4-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/06-delivery-and-recovery-4-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Detection must be followed by enforced ownership"><img src="diagrams/06-delivery-and-recovery-4-1.svg" alt="Detection must be followed by enforced ownership. The coordinator replacing an owner does not by itself stop an old process that is still alive." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#streams-commit">streams-commit</a> <a class="cite" href="07-code-evidence.html#fk-commit">fk-commit</a> <a class="cite" href="07-code-evidence.html#flink-deploy">flink-deploy</a></div></figure></section><section id="section-5"><p class="section-number">05</p><h2>Recovery-time and retention budgets</h2><p>Recovery time is approximately detection + replacement allocation + state restore + backlog catch-up. Remote restore has a lower bound of state bytes divided by effective restore bandwidth, plus metadata and computation costs. Standbys and local caches can reduce bytes transferred but consume steady-state resources.</p><p>If downtime and restore create B records of backlog and the recovered system processes at μ while new records arrive at λ, catch-up time is approximately B/(μ-λ), assuming μ&gt;λ and stable rates. If μ≤λ, the job never catches up by itself. Example: 12 million backlog records, μ=150,000/s and λ=100,000/s requires roughly 240 seconds just to catch up.</p><p>Retain Kafka input longer than maximum expected lag plus outage / recovery time. Retain checkpoints and referenced files long enough to restore and reconcile pending sink commits. Retain transaction validity long enough for the relevant checkpoint and recovery contract. These are coupled budgets, not independent housekeeping settings.</p><figure class="diagram" id="06-delivery-and-recovery-5-1"><figcaption><h3>Recovery is complete only after catch-up</h3><p>A RUNNING task can still be far behind real time. Track lag and output freshness after restart.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/06-delivery-and-recovery-5-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/06-delivery-and-recovery-5-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Recovery is complete only after catch-up"><img src="diagrams/06-delivery-and-recovery-5-1.svg" alt="Recovery is complete only after catch-up. A RUNNING task can still be far behind real time. Track lag and output freshness after restart." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#flink-restore">flink-restore</a> <a class="cite" href="07-code-evidence.html#streams-restore">streams-restore</a> <a class="cite" href="07-code-evidence.html#spark-retry">spark-retry</a></div></figure></section><section id="section-6"><p class="section-number">06</p><h2>Failure experiments that validate the design</h2><p>These are proposed experiments, not tests executed for this guide. Each should assert both output contents and recovery progress. Successful process restart alone cannot establish exactly-once behavior.</p><p>Use event_id=purchase-7 and record the source partition / offset, engine checkpoint or batch ID, transaction / snapshot ID and final sink key. This correlation lets an experiment distinguish a duplicate attempt from a duplicate committed effect.</p><div class="table-scroll"><table><thead><tr><th>Experiment</th><th>Fault injection point</th><th>Evidence to inspect</th></tr></thead><tbody><tr><td>Producer retry</td><td>Drop acknowledgement after append</td><td>One intended append under idempotent retry context; producer errors / sequence behavior.</td></tr><tr><td>Source task replay</td><td>Kill task after offset 104 emitted, before CP42 completes</td><td>Restored CP41 position, replayed range and one final logical output per event.</td></tr><tr><td>Sink completion recovery</td><td>Kill committer after CP42 completes, before external commit</td><td>Pending receipt restored and committed without missing events.</td></tr><tr><td>Ambiguous external commit</td><td>Lose success reply after T42 / S900 commits</td><td>Reconciliation prevents duplicate logical publication.</td></tr><tr><td>Insufficient Kafka ISR</td><td>Lose replicas before acks=all write</td><td>Write rejection / recovery behavior matches chosen durability policy.</td></tr><tr><td>Spark shuffle loss</td><td>Remove an executor holding required shuffle output</td><td>Driver invalidates / recomputes work; final result remains correct.</td></tr><tr><td>Native task cancellation</td><td>Stop consuming a Comet / DataFusion output stream early</td><td>Memory reservations and handles released; no growing RSS across retries.</td></tr><tr><td>Retention breach</td><td>Remove source records required by retained checkpoint in a test environment</td><td>Explicit recovery failure or configured policy, never silent correctness claims.</td></tr></tbody></table></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#fk-commit">fk-commit</a> <a class="cite" href="07-code-evidence.html#iceberg-flink">iceberg-flink</a> <a class="cite" href="07-code-evidence.html#comet-close">comet-close</a></div></section><section><h2>Inside the implementation</h2><p>These excerpts come directly from the code paths used above. Expand a component to move from the system view into its implementation.</p><details class="code" id="streams-commit"><summary>streams-commit <span>StreamsProducer.java:242</span></summary><p>Consumed offsets are added to the output producer transaction before commit.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/streams/src/main/java/org/apache/kafka/streams/processor/internals/StreamsProducer.java">Kafka/streams/src/main/java/org/apache/kafka/streams/processor/internals/StreamsProducer.java</a> · d2da6a18f839</p><pre><code> 241       */
+ 242      public void commitTransaction(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets,
+ 243                                       final ConsumerGroupMetadata consumerGroupMetadata) {
+ 244          if (!eosEnabled()) {
+ 245              throw new IllegalStateException(formatException(&quot;Exactly-once is not enabled&quot;));
+ 246          }
+ 247          maybeBeginTransaction();
+ 248          try {
+ 249              producer.sendOffsetsToTransaction(offsets, consumerGroupMetadata);
+ 250          } catch (final ProducerFencedException | InvalidProducerEpochException | CommitFailedException | InvalidPidMappingException error) {
+ 251              throw new TaskMigratedException(
+ 252                  formatException(&quot;Producer got fenced trying to add offsets to a transaction&quot;),
+ 253                  error
+ 254              );
+ 255          } catch (final TimeoutException timeoutException) {</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/streams/src/test/java/org/apache/kafka/streams/processor/internals/StreamsProducerTest.java">StreamsProducerTest.java</a></p></details><details class="code" id="connect-source-eos"><summary>connect-source-eos <span>ExactlyOnceWorkerSourceTask.java:266</span></summary><p>Source-offset flush and produced records share a producer transaction.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/connect/runtime/src/main/java/org/apache/kafka/connect/runtime/ExactlyOnceWorkerSourceTask.java">Kafka/connect/runtime/src/main/java/org/apache/kafka/connect/runtime/ExactlyOnceWorkerSourceTask.java</a> · d2da6a18f839</p><pre><code> 265
+ 266      private void commitTransaction() {
+ 267          log.debug(&quot;{} Committing offsets&quot;, this);
+ 268
+ 269          long started = time.milliseconds();
+ 270
+ 271          AtomicReference&lt;Throwable&gt; flushError = new AtomicReference&lt;&gt;();
+ 272          boolean shouldFlush = false;
+ 273          try {
+ 274              // Begin the flush without waiting, as there should not be any concurrent flushes.
+ 275              // This is because commitTransaction is always called on the same thread, and should always block until
+ 276              // the flush is complete, or cancel the flush if an error occurs.
+ 277              shouldFlush = offsetWriter.beginFlush();
+ 278          } catch (Throwable e) {
+ 279              flushError.compareAndSet(null, e);</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/connect/runtime/src/test/java/org/apache/kafka/connect/runtime/ExactlyOnceWorkerSourceTaskTest.java">ExactlyOnceWorkerSourceTaskTest.java</a> · public void testPollBasedCommit</p></details><details class="code" id="fk-state"><summary>fk-state <span>KafkaSourceReader.java:98</span></summary><p>Checkpoint state is distinct from optional Kafka group offset commits.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a> · ae656dd6fe23</p><pre><code>  97      @Override
+  98      public List&lt;KafkaPartitionSplit&gt; snapshotState(long checkpointId) {
+  99          List&lt;KafkaPartitionSplit&gt; splits = super.snapshotState(checkpointId);
+ 100          if (!commitOffsetsOnCheckpoint) {
+ 101              return splits;
+ 102          }
+ 103
+ 104          if (splits.isEmpty() &amp;&amp; offsetsOfFinishedSplits.isEmpty()) {
+ 105              offsetsToCommit.put(checkpointId, Collections.emptyMap());
+ 106          } else {
+ 107              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsMap =
+ 108                      offsetsToCommit.computeIfAbsent(checkpointId, id -&gt; new HashMap&lt;&gt;());
+ 109              // Put the offsets of the active splits.
+ 110              for (KafkaPartitionSplit split : splits) {
+ 111                  // If the checkpoint is triggered before the partition starting offsets</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java">KafkaSourceReaderTest.java</a> · testOffsetCommitOnCheckpointComplete</p></details><details class="code" id="spark-kafka"><summary>spark-kafka <span>KafkaSink.scala:34</span></summary><p>Process-local latestBatchId guards repeated calls; it is not a durable Kafka transaction.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSink.scala">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSink.scala</a> · f9358a5587a2</p><pre><code>  33
+  34    override def addBatch(batchId: Long, data: DataFrame): Unit = {
+  35      if (batchId &lt;= latestBatchId) {
+  36        logInfo(log&quot;Skipping already committed batch ${MDC(BATCH_ID, batchId)}&quot;)
+  37      } else {
+  38        KafkaWriter.write(data.queryExecution,
+  39          executorKafkaParams, topic)
+  40        latestBatchId = batchId
+  41      }
+  42    }
+  43  }
+  44  </code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaSinkSuite.scala">KafkaSinkSuite.scala</a></p></details><details class="code" id="iceberg-snapshot"><summary>iceberg-snapshot <span>SnapshotProducer.java:484</span></summary><p>Retry on CommitFailedException; ambiguous commit state propagates without unsafe cleanup.</p><p class="path"><a href="https://github.com/apache/iceberg/blob/48330b8dacab6662242d252b39c8444190979bb2/core/src/main/java/org/apache/iceberg/SnapshotProducer.java">iceberg/core/src/main/java/org/apache/iceberg/SnapshotProducer.java</a> · 48330b8dacab</p><pre><code> 483    @SuppressWarnings(&quot;checkstyle:CyclomaticComplexity&quot;)
+ 484    public void commit() {
+ 485      // this is always set to the latest commit attempt's snapshot id.
+ 486      AtomicLong newSnapshotId = new AtomicLong(-1L);
+ 487      try (Timed ignore = commitMetrics().totalDuration().start()) {
+ 488        try {
+ 489          Tasks.foreach(ops)
+ 490              .retry(base.propertyAsInt(COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT))
+ 491              .exponentialBackoff(
+ 492                  base.propertyAsInt(COMMIT_MIN_RETRY_WAIT_MS, COMMIT_MIN_RETRY_WAIT_MS_DEFAULT),
+ 493                  base.propertyAsInt(COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT),
+ 494                  base.propertyAsInt(COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT),
+ 495                  2.0 /* exponential */)
+ 496              .onlyRetryOn(CommitFailedException.class)
+ 497              .countAttempts(commitMetrics().attempts())</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/iceberg/blob/48330b8dacab6662242d252b39c8444190979bb2/core/src/test/java/org/apache/iceberg/TestSnapshotProducer.java">TestSnapshotProducer.java</a></p></details><details class="code" id="df-execute"><summary>df-execute <span>execution_plan.rs:402</span></summary><p>Execution returns one partition as an asynchronous RecordBatch stream.</p><p class="path"><a href="https://github.com/apache/datafusion/blob/4a5d58006e620bf6a175bb578be6652c3b330da9/datafusion/physical-plan/src/execution_plan.rs">datafusion/datafusion/physical-plan/src/execution_plan.rs</a> · 4a5d58006e62</p><pre><code> 401      /// #    }
+ 402      /// #    fn execute(
+ 403      /// #        &amp;self,
+ 404      /// #        _partition: usize,
+ 405      /// #        _context: Arc&lt;TaskContext&gt;,
+ 406      /// #    ) -&gt; Result&lt;SendableRecordBatchStream&gt; {
+ 407      /// #        unimplemented!()
+ 408      /// #    }
+ 409      ///     fn replace_children(
+ 410      ///         self: Arc&lt;Self&gt;,
+ 411      ///         mut children: Vec&lt;Arc&lt;dyn ExecutionPlan&gt;&gt;,
+ 412      ///         _options: ReplaceChildrenOptions,
+ 413      ///     ) -&gt; Result&lt;Arc&lt;dyn ExecutionPlan&gt;&gt; {
+ 414      ///         Ok(Arc::new(MyExec {
+ 415      ///             input: children.swap_remove(0),</code></pre></details><details class="code" id="comet-jni"><summary>comet-jni <span>jni_api.rs:1242</span></summary><p>Native execution uses a DataFusion plan inside the Spark executor process.</p><p class="path"><a href="https://github.com/apache/datafusion-comet/blob/1628c520096e12ba3fb13988d6ee235070e77e07/native/core/src/execution/jni_api.rs">datafusion-comet/native/core/src/execution/jni_api.rs</a> · 1628c520096e</p><pre><code>1241                  // so we should always execute partition 0.
+1242                  let stream = root_op.native_plan.execute(0, task_ctx)?;
+1243
+1244                  if exec_context.scans.is_empty() &amp;&amp; exec_context.shuffle_scans.is_empty() {
+1245                      // No JVM data sources — spawn onto tokio so the executor
+1246                      // thread parks in blocking_recv instead of busy-polling.
+1247                      exec_context.batch_producer =
+1248                          Some(BatchProducer::spawn(&amp;get_runtime(), stream));
+1249                  } else {
+1250                      exec_context.stream = Some(stream);
+1251                  }
+1252                  exec_context.root_op = Some(root_op);
+1253              } else {
+1254                  // Pull input batches
+1255                  pull_input_batches(exec_context)?;</code></pre></details><details class="code" id="flink-checkpoint"><summary>flink-checkpoint <span>CheckpointCoordinator.java:1360</span></summary><p>Completed checkpoint storage precedes notifications.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java">flink/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java</a> · 07805482705f</p><pre><code>1359       */
+1360      private void completePendingCheckpoint(PendingCheckpoint pendingCheckpoint)
+1361              throws CheckpointException {
+1362          final long checkpointId = pendingCheckpoint.getCheckpointID();
+1363          final CompletedCheckpoint completedCheckpoint;
+1364          final CompletedCheckpoint lastSubsumed;
+1365          final CheckpointProperties props = pendingCheckpoint.getProps();
+1366
+1367          completedCheckpointStore.getSharedStateRegistry().checkpointCompleted(checkpointId);
+1368
+1369          try {
+1370              completedCheckpoint = finalizeCheckpoint(pendingCheckpoint);
+1371
+1372              // the pending checkpoint must be discarded after the finalization
+1373              Preconditions.checkState(pendingCheckpoint.isDisposed() &amp;&amp; completedCheckpoint != null);</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/test/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinatorRestoringTest.java">CheckpointCoordinatorRestoringTest.java</a></p></details><details class="code" id="fk-commit"><summary>fk-commit <span>KafkaCommitter.java:103</span></summary><p>Retryable and fenced transaction failures are distinguished.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java</a> · ae656dd6fe23</p><pre><code> 102                  producer = writerProducer.orElseGet(() -&gt; getProducer(committable));
+ 103                  producer.commitTransaction();
+ 104                  backchannel.send(TransactionFinished.successful(committable.getTransactionalId()));
+ 105              } catch (RetriableException e) {
+ 106                  LOG.warn(
+ 107                          &quot;Encountered retriable exception while committing {}.&quot;, transactionalId, e);
+ 108                  request.retryLater();
+ 109              } catch (ProducerFencedException e) {
+ 110                  logFencedRequest(request, e);
+ 111                  handleFailedTransaction(producer);
+ 112                  request.signalFailedWithKnownReason(e);
+ 113              } catch (InvalidTxnStateException e) {
+ 114                  // This exception only occurs when aborting after a commit or vice versa.
+ 115                  // It does not appear on double commits or double aborts.
+ 116                  LOG.error(</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitterTest.java">KafkaCommitterTest.java</a></p></details><details class="code" id="iceberg-flink"><summary>iceberg-flink <span>IcebergFilesCommitter.java:231</span></summary><p>Checkpoint completion publishes files through an Iceberg snapshot.</p><p class="path"><a href="https://github.com/apache/iceberg/blob/48330b8dacab6662242d252b39c8444190979bb2/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java">iceberg/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java</a> · 48330b8dacab</p><pre><code> 230    @Override
+ 231    public void notifyCheckpointComplete(long checkpointId) throws Exception {
+ 232      super.notifyCheckpointComplete(checkpointId);
+ 233      // It's possible that we have the following events:
+ 234      //   1. snapshotState(ckpId);
+ 235      //   2. snapshotState(ckpId+1);
+ 236      //   3. notifyCheckpointComplete(ckpId+1);
+ 237      //   4. notifyCheckpointComplete(ckpId);
+ 238      // For step#4, we don't need to commit iceberg table again because in step#3 we've committed all
+ 239      // the files,
+ 240      // Besides, we need to maintain the max-committed-checkpoint-id to be increasing.
+ 241      if (checkpointId &gt; maxCommittedCheckpointId) {
+ 242        LOG.info(&quot;Checkpoint {} completed. Attempting commit.&quot;, checkpointId);
+ 243        commitUpToCheckpoint(dataFilesPerCheckpoint, flinkJobId, operatorUniqueId, checkpointId);
+ 244        this.maxCommittedCheckpointId = checkpointId;</code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/iceberg/blob/48330b8dacab6662242d252b39c8444190979bb2/flink/v2.3/flink/src/test/java/org/apache/iceberg/flink/sink/TestIcebergFilesCommitter.java">TestIcebergFilesCommitter.java</a> · public void testRecoveryFromSnapshotWithoutCompletedNotification</p></details><details class="code" id="spark-end"><summary>spark-end <span>MicroBatchExecution.scala:1487</span></summary><p>Completion metadata follows sink execution.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a> · f9358a5587a2</p><pre><code>1486     */
+1487    protected def markMicroBatchEnd(execCtx: MicroBatchExecutionContext): Unit = {
+1488      val latestExecPlan = execCtx.executionPlan.executedPlan
+1489      watermarkTracker.updateWatermark(latestExecPlan)
+1490      if (StatefulOperatorStateInfo.enableStateStoreCheckpointIds(
+1491        sparkSessionForStream.sessionState.conf)) {
+1492        updateStateStoreCkptId(execCtx, latestExecPlan)
+1493      }
+1494
+1495      // In real-time mode, we delay the offset logging until the end of the batch.
+1496      // We first gather the offsets processed up to from all RealTimeStreamScanExec,
+1497      // i.e. tasks that execute a source partition.  We merge the offsets and
+1498      // write them to the offset log
+1499      if (trigger.isInstanceOf[RealTimeTrigger]) {
+1500        populateBatchOffsetsForRTM(execCtx)</code></pre></details><details class="code" id="flink-input"><summary>flink-input <span>StreamTask.java:678</span></summary><p>Availability futures suspend and resume the input action.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/StreamTask.java">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/StreamTask.java</a> · 07805482705f</p><pre><code> 677       */
+ 678      protected void processInput(MailboxDefaultAction.Controller controller) throws Exception {
+ 679          DataInputStatus status = inputProcessor.processInput();
+ 680          switch (status) {
+ 681              case MORE_AVAILABLE:
+ 682                  if (taskIsAvailable()) {
+ 683                      return;
+ 684                  }
+ 685                  break;
+ 686              case NOTHING_AVAILABLE:
+ 687                  break;
+ 688              case END_OF_RECOVERY:
+ 689                  throw new IllegalStateException(&quot;We should not receive this event here.&quot;);
+ 690              case STOPPED:
+ 691                  endData(StopMode.NO_DRAIN);</code></pre></details><details class="code" id="df-memory"><summary>df-memory <span>mod.rs:478</span></summary><p>Tracked operators reserve memory; operator-specific spill or failure follows refusal.</p><p class="path"><a href="https://github.com/apache/datafusion/blob/4a5d58006e620bf6a175bb578be6652c3b330da9/datafusion/execution/src/memory_pool/mod.rs">datafusion/datafusion/execution/src/memory_pool/mod.rs</a> · 4a5d58006e62</p><pre><code> 477      /// in the pool.
+ 478      pub fn try_grow(&amp;self, capacity: usize) -&gt; Result&lt;()&gt; {
+ 479          self.registration.pool.try_grow(self, capacity)?;
+ 480          self.size.fetch_add(capacity, atomic::Ordering::Relaxed);
+ 481          Ok(())
+ 482      }
+ 483
+ 484      /// Splits off `capacity` bytes from this [`MemoryReservation`]
+ 485      /// into a new [`MemoryReservation`] with the same
+ 486      /// [`MemoryConsumer`].
+ 487      ///
+ 488      /// This can be useful to free part of this reservation with RAAI
+ 489      /// style dropping
+ 490      ///
+ 491      /// # Panics</code></pre></details><details class="code" id="kafka-producer"><summary>kafka-producer <span>KafkaProducer.java:1126</span></summary><p>Serialization, partition selection and accumulation before the Sender network thread.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java">Kafka/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java</a> · d2da6a18f839</p><pre><code>1125       */
+1126      private Future&lt;RecordMetadata&gt; doSend(ProducerRecord&lt;K, V&gt; record, Callback callback) {
+1127          // Append callback takes care of the following:
+1128          //  - call interceptors and user callback on completion
+1129          //  - remember partition that is calculated in RecordAccumulator.append
+1130          AppendCallbacks appendCallbacks = new AppendCallbacks(callback, this.interceptors, record);
+1131
+1132          try {
+1133              throwIfProducerClosed();
+1134              throwIfInPreparedState();
+1135
+1136              // first make sure the metadata for the topic is available
+1137              long nowMs = time.milliseconds();
+1138              ClusterAndWaitTime clusterAndWaitTime;
+1139              try {</code></pre></details><details class="code" id="flink-deploy"><summary>flink-deploy <span>TaskExecutor.java:663</span></summary><p>TaskExecutor accepts a deployment descriptor and starts a task.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/taskexecutor/TaskExecutor.java">flink/flink-runtime/src/main/java/org/apache/flink/runtime/taskexecutor/TaskExecutor.java</a> · 07805482705f</p><pre><code> 662      @Override
+ 663      public CompletableFuture&lt;Acknowledge&gt; submitTask(
+ 664              TaskDeploymentDescriptor tdd, JobMasterId jobMasterId, Duration timeout) {
+ 665
+ 666          final JobID jobId = tdd.getJobId();
+ 667          JobInformation jobInformation = null;
+ 668          try {
+ 669              jobInformation = tdd.getJobInformation();
+ 670          } catch (IllegalStateException ignored) {
+ 671              // Expected when job information is offloaded to blob storage and not yet loaded.
+ 672          } catch (IOException | ClassNotFoundException e) {
+ 673              log.debug(&quot;Could not deserialize job information for early MDC enrichment&quot;, e);
+ 674          }
+ 675          try (MdcCloseable ignored =
+ 676                  MdcUtils.withContext(</code></pre></details><details class="code" id="flink-restore"><summary>flink-restore <span>DefaultScheduler.java:358</span></summary><p>Cancel, reset, restore and redeploy task attempts.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/scheduler/DefaultScheduler.java">flink/flink-runtime/src/main/java/org/apache/flink/runtime/scheduler/DefaultScheduler.java</a> · 07805482705f</p><pre><code> 357
+ 358      private void restartTasksWithDelay(final FailureHandlingResult failureHandlingResult) {
+ 359          final Set&lt;ExecutionVertexID&gt; verticesToRestart =
+ 360                  failureHandlingResult.getVerticesToRestart();
+ 361
+ 362          final Set&lt;ExecutionVertexVersion&gt; executionVertexVersions =
+ 363                  new HashSet&lt;&gt;(
+ 364                          executionVertexVersioner
+ 365                                  .recordVertexModifications(verticesToRestart)
+ 366                                  .values());
+ 367          final boolean globalRecovery = failureHandlingResult.isGlobalFailure();
+ 368
+ 369          if (globalRecovery) {
+ 370              log.info(
+ 371                      &quot;{} tasks will be restarted to recover from a global failure.&quot;,</code></pre></details><details class="code" id="streams-restore"><summary>streams-restore <span>StoreChangelogReader.java:71</span></summary><p>Restoration and standby changelog consumption.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/streams/src/main/java/org/apache/kafka/streams/processor/internals/StoreChangelogReader.java">Kafka/streams/src/main/java/org/apache/kafka/streams/processor/internals/StoreChangelogReader.java</a> · d2da6a18f839</p><pre><code>  70   */
+  71  public class StoreChangelogReader implements ChangelogReader {
+  72      private static final long RESTORE_LOG_INTERVAL_MS = 10_000L;
+  73      private long lastRestoreLogTime = 0L;
+  74
+  75      enum ChangelogState {
+  76          // registered but need to be initialized (i.e. set its starting, end, limit offsets)
+  77          REGISTERED(&quot;REGISTERED&quot;),
+  78
+  79          // initialized and restoring
+  80          RESTORING(&quot;RESTORING&quot;, 0),
+  81
+  82          // completed restoring (only for active restoring task, standby task should never be completed)
+  83          COMPLETED(&quot;COMPLETED&quot;, 1);
+  84  </code></pre><p class="test">Test source inspected or located, not executed: <a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/streams/src/test/java/org/apache/kafka/streams/processor/internals/StoreChangelogReaderTest.java">StoreChangelogReaderTest.java</a></p></details><details class="code" id="spark-retry"><summary>spark-retry <span>DAGScheduler.scala:3886</span></summary><p>Lost shuffle data triggers scheduler failure handling and stage re-execution.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala">spark/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</a> · f9358a5587a2</p><pre><code>3885
+3886        case FetchFailed(bmAddress, shuffleId, _, mapIndex, reduceId, failureMessage) =&gt;
+3887          val failedStage = stageIdToStage(task.stageId)
+3888          val mapStage = shuffleIdToMapStage(shuffleId)
+3889
+3890          if (failedStage.latestInfo.attemptNumber() != task.stageAttemptId) {
+3891            logInfo(log&quot;Ignoring fetch failure from &quot; +
+3892              log&quot;${MDC(TASK_ID, task)} as it's from &quot; +
+3893              log&quot;${MDC(FAILED_STAGE, failedStage)} attempt &quot; +
+3894              log&quot;${MDC(STAGE_ATTEMPT_ID, task.stageAttemptId)} and there is a more recent attempt for &quot; +
+3895              log&quot;that stage (attempt &quot; +
+3896              log&quot;${MDC(NUM_ATTEMPT, failedStage.latestInfo.attemptNumber())}) running&quot;)
+3897          } else if (activeJobForStage(failedStage).flatMap(jobIdToActiveJob.get)
+3898              .exists(_.hasPipelinedDependency) &amp;&amp;
+3899              (isPipelinedGroupMember(failedStage) || isPipelinedGroupMember(mapStage))) {</code></pre></details><details class="code" id="comet-close"><summary>comet-close <span>CometExecIterator.scala:312</span></summary><p>Task lifecycle closes batches, iterators and the native plan.</p><p class="path"><a href="https://github.com/apache/datafusion-comet/blob/1628c520096e12ba3fb13988d6ee235070e77e07/spark/src/main/scala/org/apache/comet/CometExecIterator.scala">datafusion-comet/spark/src/main/scala/org/apache/comet/CometExecIterator.scala</a> · 1628c520096e</p><pre><code> 311
+ 312    def close(): Unit = synchronized {
+ 313      if (!closed) {
+ 314        closed = true
+ 315
+ 316        // Attempt every resource's cleanup independently, so that one failure does not skip the
+ 317        // remaining resources: this close() is the only chance to release them, since `closed` is
+ 318        // already set and the task-completion retry is a no-op. The first failure is rethrown with
+ 319        // any later ones attached as suppressed exceptions.
+ 320        var failure: Throwable = null
+ 321        def attempt(cleanup: =&gt; Unit): Unit = {
+ 322          try {
+ 323            cleanup
+ 324          } catch {
+ 325            case t: Throwable =&gt;</code></pre></details></section><footer><a href="end-to-end-example.html">Previous: End to end: one event and every crash window</a><a href="07-code-evidence.html">Next: Code evidence and validation</a></footer></main></div></body></html>
