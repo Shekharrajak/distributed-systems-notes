@@ -1,0 +1,1305 @@
+{
+  "sourceRevisions": {
+    "spark": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+  },
+  "sourceInspectionOnly": true,
+  "engineTestsRun": false,
+  "snippetsRun": false,
+  "liveFaultInjectionRun": false,
+  "pages": [
+    "spark-distributed-execution.html",
+    "spark-checkpoint-failure-recovery.html"
+  ],
+  "diagrams": [
+    "spark-deep-deployment",
+    "spark-deep-batch",
+    "spark-deep-ranges",
+    "spark-deep-calls",
+    "spark-deep-network",
+    "spark-deep-shuffle",
+    "spark-deep-storage",
+    "spark-deep-state-restore",
+    "spark-deep-recovery",
+    "spark-deep-crash-window",
+    "spark-deep-sink-ledger",
+    "spark-deep-no-new-data",
+    "spark-deep-loss-conditions"
+  ],
+  "evidence": [
+    {
+      "id": "spk-query-thread",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala",
+      "needle": "val queryExecutionThread: QueryExecutionThread",
+      "claim": "The driver starts a dedicated streaming query thread which runs the streaming execution.",
+      "line": 230,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala#L230",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-batch-plan",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "private def constructNextBatch(",
+      "claim": "Source offsets and the need for another stateful batch determine whether to construct a batch.",
+      "line": 979,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L979",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-v2-choice",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "if (!v2Disabled && table.supports(TableCapability.MICRO_BATCH_READ))",
+      "claim": "The streaming runtime chooses an eligible V2 reader and provides a V1 fallback according to source/configuration.",
+      "line": 281,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L281",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-planned-log",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "protected def markMicroBatchStart",
+      "claim": "Ordinary synchronous microbatch writes the planned offset log before executing sink work.",
+      "line": 1357,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1357",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-source-end",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "override def latestOffset(start: Offset, readLimit: ReadLimit)",
+      "claim": "The driver discovers end offsets and applies admission limits.",
+      "line": 136,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L136",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-source-ranges",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "override def planInputPartitions(start: Offset, end: Offset)",
+      "claim": "The driver plans explicit input ranges and KafkaBatchInputPartition objects.",
+      "line": 209,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L209",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-admin-offsets",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaOffsetReaderAdmin.scala",
+      "needle": "admin.listOffsets(listOffsetsParams, listOffsetsOptions).all().get()",
+      "claim": "The driver Kafka Admin client discovers offsets; source payloads are read by executor consumers.",
+      "line": 95,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaOffsetReaderAdmin.scala#L95",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-range-splitting",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaOffsetRangeCalculator.scala",
+      "needle": "val offsetRanges = ranges.filter(_.size > 0)",
+      "claim": "Empty source ranges are skipped; range splitting can produce several tasks per Kafka partition.",
+      "line": 51,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaOffsetRangeCalculator.scala#L51",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-reader-create",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DataSourceRDD.scala",
+      "needle": "override def compute(split: Partition, context: TaskContext)",
+      "claim": "Task execution creates the DataSource partition reader and supplies its iterator.",
+      "line": 165,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DataSourceRDD.scala#L165",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-reader",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaBatchPartitionReader.scala",
+      "needle": "private val consumer = KafkaDataConsumer.acquire(",
+      "claim": "Each executor partition reader acquires a consumer for its topic partition and tracks its assigned range.",
+      "line": 77,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaBatchPartitionReader.scala#L77",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-fetch",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "def fetch(offset: Long, pollTimeoutMs: Long)",
+      "claim": "The executor internal consumer seeks to the requested offset and polls Kafka.",
+      "line": 83,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L83",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-assign",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "c.assign(tps)",
+      "claim": "Internal consumers explicitly assign their topic partition rather than using group rebalance to schedule Spark tasks.",
+      "line": 144,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L144",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-retry-consumer",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "TaskContext.get().attemptNumber() >= 1",
+      "claim": "Reattempts invalidate consumer/fetched-data cache entries to avoid reuse of failed-attempt state.",
+      "line": 845,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L845",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-dag-tasks",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala",
+      "needle": "private def submitMissingTasks(stage: Stage, jobId: Int)",
+      "claim": "DAGScheduler computes missing stage work and submits task sets.",
+      "line": 2993,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala#L2993",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-task-offers",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/TaskSchedulerImpl.scala",
+      "needle": "def resourceOffers(",
+      "claim": "TaskSchedulerImpl places tasks into resources offered by executor processes.",
+      "line": 573,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/TaskSchedulerImpl.scala#L573",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-launch-rpc",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala",
+      "needle": "private def launchTasks(tasks: Seq[Seq[TaskDescription]])",
+      "claim": "The driver serializes task descriptions and sends LaunchTask messages to executor endpoints.",
+      "line": 457,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala#L457",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-executor-receive",
+      "file": "core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala",
+      "needle": "case LaunchTask(data)",
+      "claim": "Executor RPC receipt decodes the task and delegates to Executor.launchTask.",
+      "line": 181,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala#L181",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-task-thread",
+      "file": "core/src/main/scala/org/apache/spark/executor/Executor.scala",
+      "needle": "threadPool.execute(tr)",
+      "claim": "TaskRunner work executes in the executor task pool, independently of the driver query thread.",
+      "line": 563,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/executor/Executor.scala#L563",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-task-result",
+      "file": "core/src/main/scala/org/apache/spark/executor/Executor.scala",
+      "needle": "execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)",
+      "claim": "Task success and result metadata return to the driver through executor status messages.",
+      "line": 1051,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/executor/Executor.scala#L1051",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-shuffle-fetch",
+      "file": "core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala",
+      "needle": "shuffleClient.fetchBlocks(address.host, address.port, address.executorId,",
+      "claim": "Shuffle rows move from serving executor/shuffle-service hosts to downstream executor tasks.",
+      "line": 380,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala#L380",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-fetch-failure",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala",
+      "needle": "case FetchFailed(",
+      "claim": "A missing shuffle block causes scheduler failure handling and appropriate stage re-execution.",
+      "line": 3886,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala#L3886",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-layout",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala",
+      "needle": "private[sql] val numStateStores",
+      "claim": "State partition count is recovered from offset metadata when available, otherwise derived from SQL configuration.",
+      "line": 121,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala#L121",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-rdd",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala",
+      "needle": "StateStoreId(checkpointLocation, operatorId, partition.index)",
+      "claim": "A state store is identified by checkpoint, operator and state partition; executor placement is separate.",
+      "line": 80,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala#L80",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-locality",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala",
+      "needle": "override def getPreferredLocations(partition: Partition)",
+      "claim": "Loaded state providers guide preferred executor placement but are not the durable recovery authority.",
+      "line": 73,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala#L73",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-initial-source",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "private def getOrCreateInitialPartitionOffsets(): PartitionOffsetMap",
+      "claim": "Fresh source initial offsets are chosen once and written to source metadata; existing metadata is reused.",
+      "line": 370,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L370",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-no-kafka-commit",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "override def commit(end: Offset): Unit = {}",
+      "claim": "The Kafka V2 source commit lifecycle hook does not commit Kafka group offsets.",
+      "line": 339,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L339",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-v1-commit",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/Source.scala",
+      "needle": "def commit(end: Offset) : Unit = {}",
+      "claim": "V1 Source supplies an empty ordinary source-commit callback; KafkaSource does not add a group-offset commit.",
+      "line": 67,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/Source.scala#L67",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-config",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala",
+      "needle": "ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, // committing correctly requires new APIs in Source",
+      "claim": "Kafka source rejects user auto-commit configuration and disables internal auto commit.",
+      "line": 335,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L335",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-consumer-key",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "case class CacheKey(groupId: String, topicPartition: TopicPartition)",
+      "claim": "Consumer pool identity uses group ID and topic partition, rather than the whole settings map.",
+      "line": 818,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L818",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-producer-options",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala",
+      "needle": "private[kafka010] def kafkaParamsForProducer(",
+      "claim": "The Kafka sink passes user producer parameters through and sets serializers; acknowledgments and broker durability policy remain deployment choices.",
+      "line": 788,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L788",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-query-identity",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala",
+      "needle": "override val id: UUID = UUID.fromString(streamMetadata.id)",
+      "claim": "Query identity comes from checkpoint metadata, whereas runId is randomly generated for a new run.",
+      "line": 188,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala#L188",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-batch-sink",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "s.addBatch(execCtx.batchId, nextBatch)",
+      "claim": "The driver executes the sink and awaits the required work before writing the query completion log.",
+      "line": 1327,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1327",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-batch-complete",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "if (!commitLog.add(execCtx.batchId, metadata))",
+      "claim": "After sink success, markMicroBatchEnd publishes query completion metadata and advances committed offsets.",
+      "line": 1558,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1558",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-driver-recovery",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "protected def populateStartOffsets",
+      "claim": "Recovery compares planned and completed batch logs to replay the latest incomplete batch or advance.",
+      "line": 808,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L808",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-log-atomic",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/HDFSMetadataLog.scala",
+      "needle": "fileManager.createAtomic(batchMetadataFile, overwriteIfPossible = false)",
+      "claim": "Batch metadata publication uses the configured checkpoint file manager atomic-write contract.",
+      "line": 208,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/HDFSMetadataLog.scala#L208",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-file-manager",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala",
+      "needle": "def createAtomic(path: Path, overwriteIfPossible: Boolean)",
+      "claim": "The file manager requires complete-file atomic visibility with close or cancellation semantics.",
+      "line": 66,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala#L66",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-rename-manager",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala",
+      "needle": "override def close(): Unit = synchronized",
+      "claim": "The rename-based stream closes the temporary output and publishes it as the final checkpoint file.",
+      "line": 155,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala#L155",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-send",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaWriteTask.scala",
+      "needle": "producer.send(record, callback)",
+      "claim": "Kafka output sends happen during executor row processing, before Spark task completion.",
+      "line": 115,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaWriteTask.scala#L115",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-task-commit",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala",
+      "needle": "def commit(): WriterCommitMessage = {",
+      "claim": "Kafka task writer flushes and checks errors; abort is empty and does not roll back records.",
+      "line": 58,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala#L58",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-kafka-driver-commit",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaStreamingWrite.scala",
+      "needle": "override def useCommitCoordinator(): Boolean = false",
+      "claim": "Kafka streaming bypasses Spark task commit arbitration and its driver commit hook is empty.",
+      "line": 49,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaStreamingWrite.scala#L49",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-writer-authorization",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/WriteToDataSourceV2Exec.scala",
+      "needle": "write(dataWriter, iterWithMetrics)",
+      "claim": "Rows are written before optional task commit authorization; authorization cannot undo earlier external effects.",
+      "line": 697,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/WriteToDataSourceV2Exec.scala#L697",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-commit-arbitration",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/OutputCommitCoordinator.scala",
+      "needle": "val msg = AskPermissionToCommitOutput(stage, stageAttempt, partition, attemptNumber)",
+      "claim": "The driver arbitrates task-attempt commit permission; this is not a durable transaction with the query checkpoint.",
+      "line": 100,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/OutputCommitCoordinator.scala#L100",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-file-sink",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sinks/FileStreamSink.scala",
+      "needle": "if (batchId <= fileLog.getLatestBatchId().getOrElse(-1L)) {",
+      "claim": "The file sink can skip output batches already present in its durable sink manifest log.",
+      "line": 154,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sinks/FileStreamSink.scala#L154",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-file-manifest",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/ManifestFileCommitProtocol.scala",
+      "needle": "if (fileLog.add(batchId, fileStatuses)) {",
+      "claim": "Successful task output files become published logical output through the file sink batch manifest.",
+      "line": 78,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/ManifestFileCommitProtocol.scala#L78",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-foreach-batch",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSink.scala",
+      "needle": "callBatchWriter(ds, batchId)",
+      "claim": "User code receives the Dataset and batch ID and supplies the destination success/transaction contract.",
+      "line": 49,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSink.scala#L49",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-data-loss",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "private def reportDataLoss(message: String, getException: () => Throwable)",
+      "claim": "Detected missing source data throws when failOnDataLoss is enabled and logs otherwise; deleted input is not recreated.",
+      "line": 442,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L442",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-ranges",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaOffsetRangeCalculatorSuite.scala",
+      "needle": "with no minPartition: N TopicPartitions to N offset ranges",
+      "claim": "Inspected test covers default topic-partition to range mapping.",
+      "line": 61,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaOffsetRangeCalculatorSuite.scala#L61",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-consumer-retry",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumerSuite.scala",
+      "needle": "new KafkaDataConsumer instance in case of Task retry",
+      "claim": "Inspected test exercises fresh/invalidation behavior after task reattempt.",
+      "line": 104,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumerSuite.scala#L104",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-multi-task-consumer",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumerSuite.scala",
+      "needle": "SPARK-25151 Handles multiple tasks in executor fetching same (topic, partition) pair",
+      "claim": "Inspected test covers several task ranges sharing an executor consumer pool.",
+      "line": 253,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumerSuite.scala#L253",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-shuffle-retry",
+      "file": "core/src/test/scala/org/apache/spark/scheduler/DAGSchedulerSuite.scala",
+      "needle": "run trivial shuffle with fetch failure",
+      "claim": "Inspected test exercises map-output loss, resubmission and successful final results.",
+      "line": 1028,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/test/scala/org/apache/spark/scheduler/DAGSchedulerSuite.scala#L1028",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-log-restart",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/HDFSMetadataLogSuite.scala",
+      "needle": "test(\"HDFSMetadataLog: restart\")",
+      "claim": "Inspected test reconstructs metadata log state from storage after restart.",
+      "line": 146,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/HDFSMetadataLogSuite.scala#L146",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-log-inconsistent",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala",
+      "needle": "test(\"SPARK-38033: SS cannot be started because the commitId and offsetId are inconsistent\")",
+      "claim": "Inspected test rejects recovery with missing required batch offset metadata.",
+      "line": 164,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L164",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-file-abort",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/streaming/FileStreamSinkSuite.scala",
+      "needle": "cleanup complete but invalid output for aborted job",
+      "claim": "Inspected failure test covers cleanup and unpublished files after task/job failure.",
+      "line": 504,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/streaming/FileStreamSinkSuite.scala#L504",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-task-arbitration",
+      "file": "core/src/test/scala/org/apache/spark/scheduler/OutputCommitCoordinatorSuite.scala",
+      "needle": "Only authorized committer failures can clear the authorized committer lock",
+      "claim": "Inspected test distinguishes valid task-commit permission release from an unauthorized task failure.",
+      "line": 172,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/test/scala/org/apache/spark/scheduler/OutputCommitCoordinatorSuite.scala#L172",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-version",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala",
+      "needle": "private def nextStatefulOperationStateInfo(): StatefulOperatorStateInfo",
+      "claim": "Stateful operation info uses currentBatchId as the state version supplied to its tasks.",
+      "line": 169,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala#L169",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-coordinator",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreCoordinator.scala",
+      "needle": "def forDriver(env: SparkEnv, sqlConf: SQLConf): StateStoreCoordinatorRef",
+      "claim": "The driver registers an RPC endpoint for active state-provider locations and coordination metadata.",
+      "line": 146,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreCoordinator.scala#L146",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-hdfs-state-commit",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala",
+      "needle": "private def commitUpdates(",
+      "claim": "State updates publish the next version through the checkpoint file manager before caching it.",
+      "line": 635,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala#L635",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-hdfs-state-load",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala",
+      "needle": "private def loadMap(version: Long): HDFSBackedStateStoreMap",
+      "claim": "Cache misses load a snapshot and deltas through the requested version, rather than taking the largest state file.",
+      "line": 719,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala#L719",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-rocksdb-commit",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/RocksDB.scala",
+      "needle": "def commit(forceSnapshot: Boolean = false): (Long, StateStoreCheckpointInfo)",
+      "claim": "RocksDB commit persists snapshots or durable changelog; periodic snapshot upload can occur separately.",
+      "line": 1883,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/RocksDB.scala#L1883",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-state-ids",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/operators/stateful/statefulOperators.scala",
+      "needle": "def enableStateStoreCheckpointIds",
+      "claim": "Checkpoint format controls whether state checkpoint IDs supplement numeric versions.",
+      "line": 98,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/operators/stateful/statefulOperators.scala#L98",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-reader-loss",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "case e: OffsetOutOfRangeException =>",
+      "claim": "Out-of-range source reads fail or seek available data according to failOnDataLoss; missing Kafka records are not recovered.",
+      "line": 442,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L442",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-v2-default",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala",
+      "needle": "test(\"V2 Source is used by default\")",
+      "claim": "Inspected test asserts default streaming Kafka V2 reader selection at this source pin.",
+      "line": 1705,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala#L1705",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-state-replay",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala",
+      "needle": "failure after committing with MAX_BATCHES_TO_RETAIN_IN_MEMORY set to 1",
+      "claim": "Inspected test reloads an earlier state version after a later partition commit and simulated batch failure.",
+      "line": 330,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala#L330",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-state-restart",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala",
+      "needle": "SPARK-21145: Restarted queries create new provider instances",
+      "claim": "Inspected test verifies new state providers for restarted queries.",
+      "line": 888,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala#L888",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-atomic-file",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/CheckpointFileManagerSuite.scala",
+      "needle": "mkdirs, list, createAtomic, open, delete, exists",
+      "claim": "Inspected test checks cancel versus close behavior and complete checkpoint-file publication.",
+      "line": 58,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/CheckpointFileManagerSuite.scala#L58",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-no-data-replay",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala",
+      "needle": "no-data-batch re-executed after restart should call V1 source.getBatch()",
+      "claim": "Inspected test simulates an unfinished no-data batch and validates restart behavior.",
+      "line": 188,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L188",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-retention-policy",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaDontFailOnDataLossSuite.scala",
+      "needle": "failOnDataLoss=false should not return duplicated records: microbatch v2",
+      "claim": "Inspected retention test exercises best-effort reading; it does not prove that expired records were recovered.",
+      "line": 152,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaDontFailOnDataLossSuite.scala#L152",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-available-retry",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala",
+      "needle": "SPARK-53560: no crash looping during uncommitted batch retry in AvailableNow trigger",
+      "claim": "Inspected test exercises planning recovery after a batch failure and Kafka partition changes.",
+      "line": 2216,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala#L2216",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-async-progress",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/AsyncProgressTrackingMicroBatchExecution.scala",
+      "needle": "override def markMicroBatchStart",
+      "claim": "Async progress tracking overrides ordinary progress logging; its timing is outside the main synchronous sequence.",
+      "line": 231,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/AsyncProgressTrackingMicroBatchExecution.scala#L231",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-async-guarantees",
+      "file": "docs/streaming/performance-tips.md",
+      "needle": "Exactly once end-to-end processing will not be supported with this asynchronous progress tracking",
+      "claim": "The pinned documentation explains that asynchronous progress tracking can change replay ranges and does not support ordinary end-to-end exactly-once guarantees.",
+      "line": 63,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/docs/streaming/performance-tips.md#L63",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "id": "spk-test-foreach-state",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSinkSuite.scala",
+      "needle": "StateStore commit validation with swallowed exceptions in foreachBatch",
+      "claim": "Inspected test covers eligible state-store commit validation when a callback swallows errors and incompletely consumes stateful work.",
+      "line": 486,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSinkSuite.scala#L486",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    }
+  ],
+  "rendered": [
+    {
+      "id": "spark-deep-deployment",
+      "width": 635.5234375,
+      "height": 911.0714111328125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-batch",
+      "width": 1336,
+      "height": 1306,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-ranges",
+      "width": 924.21875,
+      "height": 632,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-calls",
+      "width": 665.28125,
+      "height": 1535.696044921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-network",
+      "width": 1087,
+      "height": 765,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-shuffle",
+      "width": 589.25,
+      "height": 887.2605590820312,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-storage",
+      "width": 1563.234375,
+      "height": 631.9264526367188,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-state-restore",
+      "width": 1081,
+      "height": 815,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-recovery",
+      "width": 692.46875,
+      "height": 1199.196044921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-crash-window",
+      "width": 1100,
+      "height": 819,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-sink-ledger",
+      "width": 560,
+      "height": 911,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-no-new-data",
+      "width": 720.55078125,
+      "height": 1381.555419921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-loss-conditions",
+      "width": 2279.1875,
+      "height": 590,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    }
+  ],
+  "diagramGeometryPassed": true,
+  "artifactChecks": {
+    "pages": [
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      }
+    ],
+    "errors": [],
+    "interactions": [
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      }
+    ]
+  },
+  "artifactChecksPassed": true
+}

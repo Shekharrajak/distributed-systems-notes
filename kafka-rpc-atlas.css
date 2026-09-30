@@ -6,5 +6,5 @@
 .rpc-index td:first-child{width:7%}.rpc-index td:nth-child(2){overflow-wrap:anywhere}.rpc-empty{padding:18px;background:#fff7d6}.source-revisions{overflow-wrap:anywhere}.guide-footer-note{font-size:13px;color:#48657b}
 .rpc-schema table td{white-space:pre-line}
 .rpc-schema table td:first-child{width:50%}
-main p,main h2,main h3{overflow-wrap:anywhere}
+main p,main h1,main h2,main h3,main li{overflow-wrap:anywhere}
 @media(max-width:760px){.rpc-body{padding:0 12px 15px}.rpc-schema>summary{padding:14px 12px}.rpc-controls{padding:15px}.guide-callout{padding:16px}}

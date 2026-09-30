@@ -1,0 +1,1389 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Spark: checkpoints, state and failure recovery · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head><body data-page="spark-checkpoint-failure-recovery.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Spark · executors · checkpoint · replay</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Spark, state, recovery…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a><a href="spark-distributed-execution.html" data-nav="spark-distributed-execution.html"><span>25</span>Spark: driver, executors and Kafka reads</a><a href="spark-checkpoint-failure-recovery.html" data-nav="spark-checkpoint-failure-recovery.html"><span>26</span>Spark: checkpoints, state and failure recovery</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 26 · Source-backed Spark deep dive</p><h1>Spark: checkpoints, state and failure recovery</h1><p class="intro">Explain why Kafka group offset commits are unnecessary for this source, how each failure is replayed across executors, and what must hold for retained input and sink effects to survive.</p><p class="guide-footer-note">Start with the process map, follow batch 42, then expand the pinned methods and tests.</p><nav class="toc" aria-label="On this page"><a href="#summary">What recovery can promise, and what it needs</a><a href="#checkpoint">Checkpoint storage: what is inside and who writes it?</a><a href="#state">State commit, cache loss and executor relocation</a><a href="#driver-restart">Driver restart: replay the unfinished batch</a><a href="#failure-matrix">Failure cases across multiple executors</a><a href="#sink">Sink success and the batch completion gap</a><a href="#custom-sink">A replay-safe foreachBatch design</a><a href="#modes-and-mental-model">Execution modes and presentation memory aids</a><a href="#evidence">Pinned code, inspected tests and validation scope</a></nav></div><section id="summary"><h2>What recovery can promise, and what it needs</h2>
+ <p>Spark’s Kafka source reads explicit ranges recorded in Spark’s checkpoint. Its source <code>commit(end)</code> is empty, and internal consumers have auto commit disabled. Kafka group offsets are therefore not the recovery ledger for this query.</p>
+ <div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer in the ordinary synchronous microbatch path</th></tr></thead><tbody><tr><td>How is input progress durable?</td><td>offsets/batchId fixes the planned end vector; commits/batchId identifies successful batch completion.</td></tr><tr><td>What does an executor failure do?</td><td>Retry the task/range using the required state version, possibly on a different executor.</td></tr><tr><td>What does a driver restart do?</td><td>Read the same checkpoint, reconcile offset and completion logs, then replay the incomplete batch or begin the next one.</td></tr><tr><td>Does that avoid skipped input?</td><td>Under retained/replayable Kafka input, durable compatible checkpoint/state storage, correct restart and successful execution, failure recovery can replay unfinished input.</td></tr><tr><td>Does that prevent duplicate output?</td><td>Only if the sink provides replay-safe effects through supported manifest, idempotency or atomic finalization. The built-in Kafka sink is at-least-once across Spark replay.</td></tr><tr><td>What if Kafka has deleted the required records?</td><td>A checkpoint stores positions and state, not a copy of all Kafka records. Detection can stop or warn/skip according to policy, but cannot restore deleted input.</td></tr></tbody></table></div>
+ <figure class="diagram" id="spark-deep-loss-conditions"><figcaption><h3>Input preservation depends on all these conditions</h3><p>These are necessary design conditions, not a proof that every deployment satisfies them. failOnDataLoss=true stops on detected missing offsets; it cannot regenerate records already removed from Kafka.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-loss-conditions.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-loss-conditions.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Input preservation depends on all these conditions"><img src="diagrams/spark-deep-loss-conditions.svg" alt="Input preservation depends on all these conditions. These are necessary design conditions, not a proof that every deployment satisfies them. failOnDataLoss=true stops on detected missing offsets; it cannot regenerate records already removed from Kafka." loading="lazy"></div></figure>
+ <p>“No data loss” here concerns recovery of retained input after failures. Query logic can intentionally filter, aggregate, deduplicate or drop late records according to watermarks. That semantic choice should be assessed separately from skipped input caused by failures.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-no-kafka-commit">spk-no-kafka-commit</a> <a class="cite" href="#ev-spk-v1-commit">spk-v1-commit</a> <a class="cite" href="#ev-spk-kafka-config">spk-kafka-config</a> <a class="cite" href="#ev-spk-planned-log">spk-planned-log</a> <a class="cite" href="#ev-spk-batch-complete">spk-batch-complete</a> <a class="cite" href="#ev-spk-driver-recovery">spk-driver-recovery</a> <a class="cite" href="#ev-spk-data-loss">spk-data-loss</a> <a class="cite" href="#ev-spk-reader-loss">spk-reader-loss</a></div></section>
+<section id="checkpoint"><h2>Checkpoint storage: what is inside and who writes it?</h2>
+ <figure class="diagram" id="spark-deep-storage"><figcaption><h3>A checkpoint directory holds several kinds of evidence</h3><p>Offsets describe input, state files describe operator state, and commit records identify completed batches. Output durability and any sink deduplication log live in the sink’s own storage.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-storage.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-storage.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: A checkpoint directory holds several kinds of evidence"><img src="diagrams/spark-deep-storage.svg" alt="A checkpoint directory holds several kinds of evidence. Offsets describe input, state files describe operator state, and commit records identify completed batches. Output durability and any sink deduplication log live in the sink’s own storage." loading="lazy"></div></figure>
+ <pre class="guide-pre"><code>checkpoint/                       illustrative directory shape
+  metadata                        persistent query identity
+  sources/0/0                     initial source offsets
+  offsets/41                      end offsets for completed batch 41
+  offsets/42                      planned end offsets for batch 42
+  commits/41                      completion of batch 41
+  commits/42                      exists only after successful batch 42
+  state/&lt;operator&gt;/&lt;partition&gt;/   versioned state and provider metadata
+
+output/_spark_metadata/           file sink's separate output manifest</code></pre>
+ <p>Paths and serialization depend on source naming and checkpoint format/provider. The tree is illustrative, not a byte-exact checkpoint dump. Newer formats can include source names, checkpoint IDs, state/schema metadata and different version headers. Do not fabricate those fields as always present.</p>
+ <div class="table-scroll"><table><thead><tr><th>Artifact</th><th>Writer</th><th>Meaning</th></tr></thead><tbody><tr><td>Source initial-offset metadata</td><td>Driver source initialization</td><td>Starting vector selected for a fresh source; differs from each later batch boundary.</td></tr><tr><td>Offset log</td><td>Driver before ordinary batch execution</td><td>Planned end vector plus batch timing/watermark/session metadata used for replay.</td></tr><tr><td>Versioned state</td><td>Executor state-store provider</td><td>Operator-partition data needed by future execution and failed-batch replay.</td></tr><tr><td>Commit log</td><td>Driver after sink success</td><td>Completed batch and relevant recovery metadata; not a distributed transaction enclosing all external writes.</td></tr><tr><td>Sink manifest / batch ledger</td><td>Sink implementation or application</td><td>Which output is logically finalized, independently of query checkpoint completion.</td></tr></tbody></table></div>
+ <p><code>HDFSMetadataLog</code> writes via <code>CheckpointFileManager.createAtomic</code>, then closes to publish or cancels on error. The rename-based manager writes a temporary file and renames it to the final name. Compatible storage must satisfy complete-file atomic visibility and durability requirements; a partial final checkpoint file would break the recovery protocol.</p>
+ <p>The driver and executors must reach the same durable checkpoint storage after replacement. A driver-local ephemeral directory cannot support recovery after that disk disappears. For object storage, use a filesystem/manager implementation with the required semantics; do not assume every rename implementation behaves like an atomic HDFS rename. The inspected manager explicitly warns about non-atomic fallback behavior.</p>
+ <p>Use one active query owner for a checkpoint and retain checkpoint-compatible source, state and query configuration. Conflict checks prevent certain concurrent log overwrites; they are not a distributed multi-writer application design. Deleting the checkpoint removes the original query’s recovery authority.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-initial-source">spk-initial-source</a> <a class="cite" href="#ev-spk-log-atomic">spk-log-atomic</a> <a class="cite" href="#ev-spk-file-manager">spk-file-manager</a> <a class="cite" href="#ev-spk-rename-manager">spk-rename-manager</a> <a class="cite" href="#ev-spk-batch-complete">spk-batch-complete</a> <a class="cite" href="#ev-spk-state-ids">spk-state-ids</a> <a class="cite" href="#ev-spk-file-manifest">spk-file-manifest</a> <a class="cite" href="#ev-spk-test-atomic-file">spk-test-atomic-file</a> <a class="cite" href="#ev-spk-test-log-restart">spk-test-log-restart</a></div></section>
+<section id="state"><h2>State commit, cache loss and executor relocation</h2>
+ <figure class="diagram" id="spark-deep-state-restore"><figcaption><h3>Lost executor: reload the required state version elsewhere</h3><p>Example stateful batch 42. Task attempts can write version 43 before the global batch succeeds. The retry must reconstruct from the required version 42 and the selected checkpoint IDs when enabled.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-state-restore.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-state-restore.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Lost executor: reload the required state version elsewhere"><img src="diagrams/spark-deep-state-restore.svg" alt="Lost executor: reload the required state version elsewhere. Example stateful batch 42. Task attempts can write version 43 before the global batch succeeds. The retry must reconstruct from the required version 42 and the selected checkpoint IDs when enabled." loading="lazy"></div></figure>
+ <p>For batch <code>b</code>, <code>IncrementalExecution</code> supplies state version <code>b</code>; providers produce <code>b+1</code> after applying the batch. With batch 42, a stateful task reads version 42 and commits version 43. A version-43 artifact may exist before the global batch succeeds.</p>
+ <p>If the batch later fails, recovery asks for the state corresponding to the required replay boundary, not whichever version filename is largest. The inspected state test commits a later version, evicts the earlier cache, simulates global failure, then reloads the earlier durable state and regenerates the abandoned next version.</p>
+ <div class="table-scroll"><table><thead><tr><th>Provider / component</th><th>Working state</th><th>Durable commit and restore</th></tr></thead><tbody><tr><td>HDFSBackedStateStoreProvider</td><td>Executor-local versioned maps/cache</td><td>Finalize the next delta through atomic checkpoint I/O; load an appropriate snapshot and deltas through the requested version on cache miss.</td></tr><tr><td>RocksDBStateStoreProvider / RocksDB</td><td>Local RocksDB working files on the executor</td><td>Persist a remote checkpoint snapshot or durable changelog. Cold recovery reconstructs from remote artifacts.</td></tr><tr><td>RocksDB changelog mode</td><td>Local DB plus changelog tracking</td><td>Per-batch changelog commits establish durability; periodic snapshot uploads may run separately. Forced snapshots use the commit path.</td></tr><tr><td>StateStoreCoordinator</td><td>Driver RPC endpoint and active-provider location map</td><td>Helps placement and coordination/optional validation; it is not the durable state database.</td></tr><tr><td>StateStoreRDD</td><td>Executor task access plus preferred locations</td><td>Build provider identity and load the required operator-partition state on the chosen executor.</td></tr></tbody></table></div>
+ <p>Driver <code>StateStoreCoordinator</code> registers a Spark RPC endpoint. Executors report active provider instances and ask about preferred locations. The driver can lose this in-memory map while the checkpoint state remains intact; restarted providers register again. Do not draw this coordinator as a replicated cluster state topic.</p>
+ <p>Checkpoint-format caveat: at this pin state format 1 is the default, and numeric state versions are central. Format 2 or later enables state checkpoint IDs, which help identify selected attempts/lineage. State metadata in the query commit log therefore depends on the enabled format. The replay diagrams acknowledge optional IDs rather than showing UUIDs as mandatory fields.</p>
+ <details class="qa"><summary>Why asynchronous RocksDB snapshot upload can still be durable</summary><p>With changelog checkpointing enabled, the batch commit persists its changelog synchronously, while a periodic snapshot may be uploaded asynchronously. Durability follows the durable changelog and valid base snapshot/lineage, rather than waiting for every periodic snapshot. This can reduce commit upload cost but increase cold-restore replay work. Without changelog checkpointing, snapshot checkpoint upload is part of ordinary commit. Local RocksDB files alone cannot survive loss of the executor’s disk.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-state-version">spk-state-version</a> <a class="cite" href="#ev-spk-state-rdd">spk-state-rdd</a> <a class="cite" href="#ev-spk-state-locality">spk-state-locality</a> <a class="cite" href="#ev-spk-hdfs-state-commit">spk-hdfs-state-commit</a> <a class="cite" href="#ev-spk-hdfs-state-load">spk-hdfs-state-load</a> <a class="cite" href="#ev-spk-rocksdb-commit">spk-rocksdb-commit</a> <a class="cite" href="#ev-spk-state-coordinator">spk-state-coordinator</a> <a class="cite" href="#ev-spk-state-ids">spk-state-ids</a> <a class="cite" href="#ev-spk-test-state-replay">spk-test-state-replay</a> <a class="cite" href="#ev-spk-test-state-restart">spk-test-state-restart</a></div></section>
+<section id="driver-restart"><h2>Driver restart: replay the unfinished batch</h2>
+ <figure class="diagram" id="spark-deep-recovery"><figcaption><h3>Driver restart: compare offsets and commits</h3><p>Normal synchronous microbatch recovery. The previous offset entry supplies the start vector; the latest planned entry supplies the end vector. Inconsistent or missing required entries can fail recovery.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-recovery.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-recovery.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Driver restart: compare offsets and commits"><img src="diagrams/spark-deep-recovery.svg" alt="Driver restart: compare offsets and commits. Normal synchronous microbatch recovery. The previous offset entry supplies the start vector; the latest planned entry supplies the end vector. Inconsistent or missing required entries can fail recovery." loading="lazy"></div></figure>
+ <p>Worked example: <code>offsets/41</code> has <code>{120,200,90,50}</code>, and <code>offsets/42</code> has <code>{180,240,115,70}</code>. If only <code>commits/41</code> exists, Spark treats 42 as unfinished and reruns those fixed ranges with required prior state. If <code>commits/42</code> exists, its end vector becomes the next start vector and Spark moves to batch 43.</p>
+ <p>The new driver also restores captured watermark/session/checkpoint metadata and selected state checkpoint IDs when present. Replaying a completed batch is not the intended normal path. Replaying an unfinished batch is intentional, even if some of its external output already exists.</p>
+ <p>Executor JVMs remaining alive do not elect a new query driver or advance the query checkpoint themselves. The deployment must restart the driver/query with access to the same checkpoint. Spark task retry, cluster-manager executor replacement and driver application restart are separate recovery actions.</p>
+ <p>Missing previous offsets, incompatible state metadata or inconsistent log entries can stop recovery. The correct response is to repair or restore a valid supported checkpoint/source state; silently moving to newer offsets can skip input. Changing <code>startingOffsets</code> cannot rewrite the progress of an existing checkpoint.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-driver-recovery">spk-driver-recovery</a> <a class="cite" href="#ev-spk-initial-source">spk-initial-source</a> <a class="cite" href="#ev-spk-batch-complete">spk-batch-complete</a> <a class="cite" href="#ev-spk-test-log-inconsistent">spk-test-log-inconsistent</a> <a class="cite" href="#ev-spk-test-no-data-replay">spk-test-no-data-replay</a> <a class="cite" href="#ev-spk-test-available-retry">spk-test-available-retry</a></div></section>
+<section id="failure-matrix"><h2>Failure cases across multiple executors</h2>
+ <div class="table-scroll"><table><thead><tr><th>Failure point</th><th>Durable evidence</th><th>Recovery path</th><th>Output / availability consequence</th></tr></thead><tbody><tr><td>Driver before offsets/42 is published</td><td>Completed batch 41 remains recorded</td><td>Restart and construct the next batch from intact progress</td><td>End offsets may be discovered again; no completed 42 is inferred</td></tr><tr><td>Driver after offsets/42, before tasks</td><td>Planned 42 and completed 41</td><td>Restart replays the fixed batch-42 ranges</td><td>Extra recovery time, with input preserved if retained</td></tr><tr><td>Executor during source read / transform</td><td>Planned ranges and last durable state</td><td>Retry the task on an available executor</td><td>Previously issued external side effects can repeat</td></tr><tr><td>One state task commits 43, another task fails</td><td>Some next-state files exist; commits/42 absent</td><td>Retry from required version 42 and regenerate next state</td><td>A partition state commit does not establish global batch completion</td></tr><tr><td>Executor with warm state cache disappears</td><td>Remote state version remains</td><td>Reload snapshot/deltas/changelog on another executor</td><td>Cold-load latency and storage bandwidth cost</td></tr><tr><td>Local shuffle blocks disappear</td><td>Source replay boundaries and durable state remain</td><td>FetchFailed handling recomputes missing map/stage work under retry limits</td><td>Lost local blocks are recomputable work, not durable source progress</td></tr><tr><td>Partial Kafka/custom sink output then task failure</td><td>Some accepted output exists; no global completion</td><td>Retry task or unfinished batch</td><td>At-least-once effects unless sink protects repeats</td></tr><tr><td>Sink success then driver loss before commits/42</td><td>Output exists, checkpoint still unfinished</td><td>Restart replays 42</td><td>Kafka appends can duplicate; manifest/ledger sinks can recognize prior finalization</td></tr><tr><td>Driver loss after commits/42 publication</td><td>42 completion exists</td><td>Begin 43 from 42 end offsets</td><td>Relies on the sink success contract meaning durable completion</td></tr><tr><td>Checkpoint I/O failure</td><td>Last intact files remain; newer external effects may exist</td><td>Fail task/query and recover from intact supported progress</td><td>Replay window grows; storage availability can stop progress</td></tr><tr><td>Kafka leader/network failure</td><td>Broker replicas plus checkpoint range boundaries</td><td>Client leader rediscovery/retries and possibly Spark task retry</td><td>Availability pauses; broker durability/retention determine replayability</td></tr><tr><td>Kafka retention deletes needed input</td><td>Checkpoint positions still exist, records do not</td><td>Fail on detected loss with true; best-effort warn/skip with false</td><td>Missing records cannot be reconstructed by checkpointing</td></tr><tr><td>Checkpoint deleted or ephemeral storage lost</td><td>Recovery authority missing</td><td>Fresh-query semantics or restore an external checkpoint backup</td><td>Existing query recovery guarantee no longer applies</td></tr><tr><td>Concurrent/incompatible checkpoint use</td><td>Metadata may conflict or no longer fit the plan</td><td>Integrity/configuration errors or unsupported recovery</td><td>Do not assume a shared checkpoint makes independent queries coordinated</td></tr></tbody></table></div>
+ <p>Retry limits and restart policy matter. A correct replay path does not guarantee infinite availability during permanent storage or network failure. Adequate Kafka retention must cover source backlog plus outage plus recovery/catch-up time, with margin; size-based retention, compaction, topic deletion and disk failure require separate consideration.</p>
+ <p><code>failOnDataLoss=true</code> changes the response to detected missing data; it is not a retention mechanism. With false, the reader can move to still-available offsets inside the requested range or return no record if no overlap remains. Gaps caused by control/aborted records should not be confused with proof that every offset integer was a user record.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-fetch-failure">spk-fetch-failure</a> <a class="cite" href="#ev-spk-test-shuffle-retry">spk-test-shuffle-retry</a> <a class="cite" href="#ev-spk-retry-consumer">spk-retry-consumer</a> <a class="cite" href="#ev-spk-test-state-replay">spk-test-state-replay</a> <a class="cite" href="#ev-spk-driver-recovery">spk-driver-recovery</a> <a class="cite" href="#ev-spk-reader-loss">spk-reader-loss</a> <a class="cite" href="#ev-spk-data-loss">spk-data-loss</a> <a class="cite" href="#ev-spk-test-retention-policy">spk-test-retention-policy</a></div></section>
+<section id="sink"><h2>Sink success and the batch completion gap</h2>
+ <figure class="diagram" id="spark-deep-crash-window"><figcaption><h3>Output can succeed before the query commit is durable</h3><p>This sequence uses a replayable input and a sink that accepts repeats. Recovery preserves input coverage but can duplicate external effects. A sink must provide its own replay-safe behavior for exactly-once results.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-crash-window.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-crash-window.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Output can succeed before the query commit is durable"><img src="diagrams/spark-deep-crash-window.svg" alt="Output can succeed before the query commit is durable. This sequence uses a replayable input and a sink that accepts repeats. Recovery preserves input coverage but can duplicate external effects. A sink must provide its own replay-safe behavior for exactly-once results." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Sink</th><th>What its commit means</th><th>Replay behavior</th></tr></thead><tbody><tr><td>Built-in Kafka streaming sink</td><td>Executor sends records, flushes and checks errors; driver commit is empty</td><td>Already accepted output can be appended again during task/batch replay. Producer idempotence does not deduplicate new send calls from replay.</td></tr><tr><td>Streaming file sink</td><td>Publish successful task file list in output/_spark_metadata</td><td>Skip batches already present in the sink log. Logical append output can be replay-safe with compatible storage and metadata-aware readers.</td></tr><tr><td>foreachBatch with ordinary external writes</td><td>User function returns after whatever it considers success</td><td>At-least-once unless destination/application supplies repeat protection; parallel per-partition transactions do not create one global batch transaction.</td></tr><tr><td>Custom transactional / idempotent sink</td><td>Destination recognizes a stable completion identity atomically with effects</td><td>Can provide exactly-once effects within that destination’s supported atomicity and concurrency contract.</td></tr><tr><td>Generic V2 streaming writer</td><td>Executor writer messages plus driver commit(epochId,messages)</td><td>Connector must implement replay-safe epoch commit; using the interface alone does not supply it.</td></tr><tr><td>Console / memory</td><td>Debug output in console or driver state</td><td>Not a durable production sink for end-to-end preservation.</td></tr></tbody></table></div>
+ <p><code>KafkaDataWriter.write</code> sends rows before its <code>commit()</code>. Commit flushes, checks callback errors and returns a writer message. Abort does not roll those sends back. <code>KafkaStreamingWrite.useCommitCoordinator</code> is false, and its driver commit/abort hooks are empty. A stable Kafka key also does not by itself deduplicate append-log output; repeated sends remain records unless readers or a destination apply a defined deduplication/upsert policy.</p>
+ <p>Kafka sink durability also depends on producer acknowledgments, topic replication and ISR policy. Spark passes producer options through; flushing an acknowledgment-free send cannot establish durable broker output before the query completion log advances.</p>
+ <p>Spark’s <code>OutputCommitCoordinator</code> arbitrates task-attempt permission for connectors that use it. It is a driver RPC/in-memory decision, not a durable transaction spanning query logs and sink output. The V2 task path writes rows before asking for commit permission, so the coordinator cannot undo effects already exposed by an incompatible writer. Kafka streaming bypasses that arbitration.</p>
+ <p>File sink output has a separate persistent manifest. After a completed output batch but a missing query commit, replay checks the manifest and skips the already published batch. Partial tasks can leave physical files, and cleanup is best effort. Metadata-aware readers define the logical output; raw directory globbing can include orphan/unpublished files.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-kafka-send">spk-kafka-send</a> <a class="cite" href="#ev-spk-kafka-task-commit">spk-kafka-task-commit</a> <a class="cite" href="#ev-spk-kafka-driver-commit">spk-kafka-driver-commit</a> <a class="cite" href="#ev-spk-producer-options">spk-producer-options</a> <a class="cite" href="#ev-spk-writer-authorization">spk-writer-authorization</a> <a class="cite" href="#ev-spk-commit-arbitration">spk-commit-arbitration</a> <a class="cite" href="#ev-spk-file-sink">spk-file-sink</a> <a class="cite" href="#ev-spk-file-manifest">spk-file-manifest</a> <a class="cite" href="#ev-spk-test-task-arbitration">spk-test-task-arbitration</a> <a class="cite" href="#ev-spk-test-file-abort">spk-test-file-abort</a></div></section>
+<section id="custom-sink"><h2>A replay-safe foreachBatch design</h2>
+ <figure class="diagram" id="spark-deep-sink-ledger"><figcaption><h3>Application pattern: output and batch ledger in one transaction</h3><p>Illustrative foreachBatch sink design, not a built-in Spark transaction. All output changes covered by the ledger must share a supported atomic finalization protocol; ordinary parallel JDBC writes do not automatically share one transaction.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/spark-deep-sink-ledger.svg" target="_blank">Full-size SVG</a><a href="diagrams/spark-deep-sink-ledger.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Application pattern: output and batch ledger in one transaction"><img src="diagrams/spark-deep-sink-ledger.svg" alt="Application pattern: output and batch ledger in one transaction. Illustrative foreachBatch sink design, not a built-in Spark transaction. All output changes covered by the ledger must share a supported atomic finalization protocol; ordinary parallel JDBC writes do not automatically share one transaction." loading="lazy"></div></figure>
+ <p>Use a stable query identity and Spark batch ID to identify a batch’s effects. The query’s restart-specific run ID is unsuitable for recognizing the same batch after restart. A destination can apply output and a completion ledger in one transaction, or atomically publish a staged output set associated with that batch.</p>
+ <pre class="guide-pre"><code>Illustrative application protocol, not a Spark built-in transaction:
+
+begin destination transaction
+enforce unique (stableQueryId, batchId) and concurrency-safe finalization
+if ledger contains (stableQueryId, batchId):
+    finish without applying the same effects again
+else:
+    apply all output covered by this batch identity
+    insert (stableQueryId, batchId) into durable ledger
+    atomically commit output plus ledger
+on conflicting finalization: roll back all this attempt's output,
+    then verify the winning attempt's durable completion
+
+return from foreachBatch only after recognized durable success</code></pre>
+ <p>Writing “done” before the output can lose effects on a crash; writing it after output in an unrelated transaction can duplicate them on replay. A driver transaction around a ledger cannot automatically enclose JDBC transactions opened by separate executor tasks. Use a destination-supported staging/finalization scheme, durable per-record idempotency, or another protocol that covers all partial and concurrent attempts.</p>
+ <p>Do not launch asynchronous writes and return from the callback before their success is known. Do not swallow failures and report successful completion. For stateful plans, consume the required data/state partitions; this pin has eligible state-store commit validation for incomplete foreachBatch execution, but it cannot certify that arbitrary external side effects succeeded.</p>
+ <p>If a custom callback writes several destinations, finalizing each independently does not supply cross-destination atomicity. Decide which completion identities each destination honors and how partial success is repaired.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-foreach-batch">spk-foreach-batch</a> <a class="cite" href="#ev-spk-query-identity">spk-query-identity</a> <a class="cite" href="#ev-spk-batch-sink">spk-batch-sink</a> <a class="cite" href="#ev-spk-batch-complete">spk-batch-complete</a> <a class="cite" href="#ev-spk-test-foreach-state">spk-test-foreach-state</a></div></section>
+<section id="modes-and-mental-model"><h2>Execution modes and presentation memory aids</h2>
+ <div class="table-scroll"><table><thead><tr><th>Mode</th><th>Progress timing</th><th>Use this chapter’s timeline?</th></tr></thead><tbody><tr><td>Ordinary synchronous microbatch</td><td>Chosen offsets before execution; completion after sink success</td><td>Yes: the main diagrams are scoped to this path</td></tr><tr><td>Asynchronous progress tracking</td><td>Separate subclass writes progress asynchronously; replay ranges can change after failure</td><td>No: this removes the ordinary end-to-end exactly-once model, and this pin rejects stateful queries</td></tr><tr><td>Continuous processing</td><td>Separate continuous execution and epoch coordination</td><td>No: do not substitute the microbatch sequence; assess its at-least-once guarantees and supported operators</td></tr><tr><td>RealTimeTrigger at this pin</td><td>Processed offsets gathered from source tasks and logged at batch end; additional state/checkpoint constraints</td><td>No: it uses MicroBatchExecution but overrides the ordinary timing and source/shuffle behavior</td></tr></tbody></table></div>
+ <p>During a presentation, point to three durable ledgers: Kafka input records, Spark query/state checkpoint, and sink output/finalization. Then ask where the failure occurs. Executor failure changes a task attempt; driver failure changes the query process; neither should change a recorded unfinished batch’s intended range under ordinary synchronous recovery.</p>
+ <p>Remember five facts: the driver chooses offset vectors; executors fetch directly; state follows operator partitions; completion logs decide replay; sinks decide whether repeated execution repeats effects. Kafka source <code>commit()</code> is a lifecycle hook with an empty implementation here, while Spark’s checkpoint <code>commits/42</code> is actual query progress evidence.</p>
+ <p>Replay requires retained source and valid durable state. Exactly-once effects also require deterministic/compatible replay and sink repeat protection. Spark records certain batch timestamp/watermark metadata, but arbitrary randomness, mutable external lookups and fire-and-forget user code can change results across attempts.</p>
+ <p>The source/test appendix records what was inspected. Documentation rendering and layout checks were run; Spark engine tests, multi-executor fault injection, example execution and performance benchmarks were not run.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spk-batch-plan">spk-batch-plan</a> <a class="cite" href="#ev-spk-planned-log">spk-planned-log</a> <a class="cite" href="#ev-spk-batch-complete">spk-batch-complete</a> <a class="cite" href="#ev-spk-async-progress">spk-async-progress</a> <a class="cite" href="#ev-spk-async-guarantees">spk-async-guarantees</a> <a class="cite" href="#ev-spk-no-kafka-commit">spk-no-kafka-commit</a> <a class="cite" href="#ev-spk-driver-recovery">spk-driver-recovery</a></div></section>
+<section id="evidence"><h2>Pinned code, inspected tests and validation scope</h2><p>Pinned tracked Apache Spark source: <a href="https://github.com/apache/spark/tree/f9358a5587a2d512c5cf08ba4b10d60007c93f6e">f9358a5587a2d512c5cf08ba4b10d60007c93f6e</a>. Untracked experimental share-group files in the supplied checkout are outside this chapter’s scope.</p><p>Source and test bodies were inspected. Spark engine tests, executable snippets, performance benchmarks and live multi-executor fault injection were not run. Placements, offsets, directory trees and failure timings are illustrative. Apache source excerpts are licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p><details class="code" id="ev-spk-batch-plan"><summary>spk-batch-plan · MicroBatchExecution.scala:979</summary><p>Source offsets and the need for another stateful batch determine whether to construct a batch.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L979">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>979    private def constructNextBatch(
+980        execCtx: MicroBatchExecutionContext,
+981        noDataBatchesEnabled: Boolean): Boolean = withProgressLocked {
+982      if (execCtx.isCurrentBatchConstructed) return true
+983
+984      // Generate a map from each unique source to the next available offset.
+985      val (nextOffsets, recentOffsets) = uniqueSources.toSeq.map {
+986        case (s: AvailableNowDataStreamWrapper, limit) =&gt;
+987          execCtx.updateStatusMessage(s&quot;Getting offsets from $s&quot;)
+988          val originalSource = s.delegate
+989          execCtx.reportTimeTaken(&quot;latestOffset&quot;) {
+990            val next = s.latestOffset(getStartOffset(execCtx, originalSource), limit)
+991            val latest = s.reportLatestOffset()
+992            ((originalSource, Option(next)), (originalSource, Option(latest)))
+993          }
+994        case (s: SupportsAdmissionControl, limit) =&gt;
+995          execCtx.updateStatusMessage(s&quot;Getting offsets from $s&quot;)
+996          execCtx.reportTimeTaken(&quot;latestOffset&quot;) {
+997            val next = s.latestOffset(getStartOffset(execCtx, s), limit)
+998            val latest = s.reportLatestOffset()
+999            ((s, Option(next)), (s, Option(latest)))
+1000          }
+1001        case (s: Source, _) =&gt;
+1002          execCtx.updateStatusMessage(s&quot;Getting offsets from $s&quot;)
+1003          execCtx.reportTimeTaken(&quot;getOffset&quot;) {
+1004            val offset = s.getOffset
+1005            ((s, offset), (s, offset))
+1006          }</code></pre></details>
+<details class="code" id="ev-spk-planned-log"><summary>spk-planned-log · MicroBatchExecution.scala:1357</summary><p>Ordinary synchronous microbatch writes the planned offset log before executing sink work.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1357">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1357    protected def markMicroBatchStart(execCtx: MicroBatchExecutionContext): Unit = {
+1358
+1359      if (!trigger.isInstanceOf[RealTimeTrigger]) {
+1360        if (!offsetLog.add(
+1361            execCtx.batchId,
+1362            execCtx.endOffsets.toOffsets(sources, sourceIdMap, execCtx.offsetSeqMetadata)
+1363          )) {
+1364          throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+1365        }
+1366
+1367        logInfo(
+1368          log&quot;Committed offsets for batch ${MDC(LogKeys.BATCH_ID, execCtx.batchId)}. &quot; +
+1369          log&quot;Metadata ${MDC(LogKeys.OFFSET_SEQUENCE_METADATA, execCtx.offsetSeqMetadata.toString)}&quot;
+1370        )
+1371      } else {
+1372        logInfo(log&quot;Delay offset logging for batch ${MDC(BATCH_ID, execCtx.batchId)} &quot; +
+1373          log&quot;in real time mode.&quot;)
+1374      }
+1375    }
+1376
+1377    /**
+1378     * Method called once after the planning is done and before the start of the microbatch execution.
+1379     * It can be used to perform any pre-execution tasks.
+1380     */
+1381    protected def markMicroBatchExecutionStart(execCtx: MicroBatchExecutionContext): Unit = {}
+1382
+1383    /**
+1384     * Store the state store checkpoint id for a finishing batch to `currentStateStoreCkptId`,</code></pre></details>
+<details class="code" id="ev-spk-retry-consumer"><summary>spk-retry-consumer · KafkaDataConsumer.scala:845</summary><p>Reattempts invalidate consumer/fetched-data cache entries to avoid reuse of failed-attempt state.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L845">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala</a></p><pre class="guide-pre"><code>845      if (TaskContext.get() != null &amp;&amp; TaskContext.get().attemptNumber() &gt;= 1) {
+846        val cacheKey = new CacheKey(topicPartition, kafkaParams)
+847
+848        // If this is reattempt at running the task, then invalidate cached consumer if any.
+849        consumerPool.invalidateKey(cacheKey)
+850
+851        // invalidate all fetched data for the key as well
+852        // sadly we can't pinpoint specific data and invalidate cause we don't have unique id
+853        fetchedDataPool.invalidate(cacheKey)
+854      }
+855
+856      new KafkaDataConsumer(topicPartition, kafkaParams, consumerPool, fetchedDataPool)
+857    }
+858
+859    private[kafka010] def getActiveSizeInConsumerPool(groupIdPrefix: String): Int = {
+860      consumerPool.numActiveInGroupIdPrefix(groupIdPrefix)
+861    }
+862  }
+863</code></pre></details>
+<details class="code" id="ev-spk-fetch-failure"><summary>spk-fetch-failure · DAGScheduler.scala:3886</summary><p>A missing shuffle block causes scheduler failure handling and appropriate stage re-execution.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala#L3886">spark/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</a></p><pre class="guide-pre"><code>3886        case FetchFailed(bmAddress, shuffleId, _, mapIndex, reduceId, failureMessage) =&gt;
+3887          val failedStage = stageIdToStage(task.stageId)
+3888          val mapStage = shuffleIdToMapStage(shuffleId)
+3889
+3890          if (failedStage.latestInfo.attemptNumber() != task.stageAttemptId) {
+3891            logInfo(log&quot;Ignoring fetch failure from &quot; +
+3892              log&quot;${MDC(TASK_ID, task)} as it's from &quot; +
+3893              log&quot;${MDC(FAILED_STAGE, failedStage)} attempt &quot; +
+3894              log&quot;${MDC(STAGE_ATTEMPT_ID, task.stageAttemptId)} and there is a more recent attempt for &quot; +
+3895              log&quot;that stage (attempt &quot; +
+3896              log&quot;${MDC(NUM_ATTEMPT, failedStage.latestInfo.attemptNumber())}) running&quot;)
+3897          } else if (activeJobForStage(failedStage).flatMap(jobIdToActiveJob.get)
+3898              .exists(_.hasPipelinedDependency) &amp;&amp;
+3899              (isPipelinedGroupMember(failedStage) || isPipelinedGroupMember(mapStage))) {
+3900            // Failure is group-atomic for a pipelined group. The base scheduler handles a
+3901            // FetchFailed by resubmitting just the map stage in isolation and recomputing serially,
+3902            // but a transient pipelined shuffle cannot be re-read and its members are co-scheduled,
+3903            // so a lone-stage resubmit is never valid and would deadlock the group. Abort the
+3904            // whole group instead: aborting the failed stage tears down its running co-scheduled
+3905            // members and fails the job, and the caller (e.g. the streaming batch loop) reruns the
+3906            // batch from scratch. This is distinct from the maxTaskFailures=1 lever (which handles
+3907            // task failures the TaskSetManager counts): a FetchFailed is NOT counted there (the base
+3908            // TaskSetManager marks the task successful and zombies the set), so the routing to group
+3909            // failure must be enforced here.
+3910            logInfo(log&quot;Failing pipelined group containing ${MDC(FAILED_STAGE, failedStage)} &quot; +
+3911              log&quot;(${MDC(FAILED_STAGE_NAME, failedStage.name)}) atomically due to a fetch failure &quot; +
+3912              log&quot;from ${MDC(STAGE, mapStage)} (${MDC(STAGE_NAME, mapStage.name)})&quot;)
+3913            failedStage.failedAttemptIds.add(task.stageAttemptId)</code></pre></details>
+<details class="code" id="ev-spk-state-rdd"><summary>spk-state-rdd · StateStoreRDD.scala:80</summary><p>A state store is identified by checkpoint, operator and state partition; executor placement is separate.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala#L80">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala</a></p><pre class="guide-pre"><code>80        StateStoreId(checkpointLocation, operatorId, partition.index),
+81        queryRunId)
+82    }
+83  }
+84
+85  /**
+86   * An RDD that allows computations to be executed against [[ReadStateStore]]s. It
+87   * uses the [[StateStoreCoordinator]] to get the locations of loaded state stores
+88   * and use that as the preferred locations.
+89   */
+90  class ReadStateStoreRDD[T: ClassTag, U: ClassTag](
+91      dataRDD: RDD[T],
+92      storeReadFunction: (ReadStateStore, Iterator[T]) =&gt; Iterator[U],
+93      checkpointLocation: String,
+94      queryRunId: UUID,
+95      operatorId: Long,
+96      storeVersion: Long,
+97      stateStoreCkptIds: Option[Array[Array[String]]],
+98      stateSchemaBroadcast: Option[StateSchemaBroadcast],
+99      keySchema: StructType,
+100      valueSchema: StructType,
+101      keyStateEncoderSpec: KeyStateEncoderSpec,
+102      sessionState: SessionState,
+103      @transient private val storeCoordinator: Option[StateStoreCoordinatorRef],
+104      useColumnFamilies: Boolean = false,
+105      extraOptions: Map[String, String] = Map.empty)
+106    extends BaseStateStoreRDD[T, U](dataRDD, checkpointLocation, queryRunId, operatorId,
+107      sessionState, storeCoordinator, extraOptions) {</code></pre></details>
+<details class="code" id="ev-spk-state-locality"><summary>spk-state-locality · StateStoreRDD.scala:73</summary><p>Loaded state providers guide preferred executor placement but are not the durable recovery authority.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala#L73">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreRDD.scala</a></p><pre class="guide-pre"><code>73    override def getPreferredLocations(partition: Partition): Seq[String] = {
+74      val stateStoreProviderId = getStateProviderId(partition)
+75      storeCoordinator.flatMap(_.getLocation(stateStoreProviderId)).toSeq
+76    }
+77
+78    protected def getStateProviderId(partition: Partition): StateStoreProviderId = {
+79      StateStoreProviderId(
+80        StateStoreId(checkpointLocation, operatorId, partition.index),
+81        queryRunId)
+82    }
+83  }
+84
+85  /**
+86   * An RDD that allows computations to be executed against [[ReadStateStore]]s. It
+87   * uses the [[StateStoreCoordinator]] to get the locations of loaded state stores
+88   * and use that as the preferred locations.
+89   */
+90  class ReadStateStoreRDD[T: ClassTag, U: ClassTag](
+91      dataRDD: RDD[T],
+92      storeReadFunction: (ReadStateStore, Iterator[T]) =&gt; Iterator[U],
+93      checkpointLocation: String,
+94      queryRunId: UUID,
+95      operatorId: Long,
+96      storeVersion: Long,
+97      stateStoreCkptIds: Option[Array[Array[String]]],
+98      stateSchemaBroadcast: Option[StateSchemaBroadcast],
+99      keySchema: StructType,
+100      valueSchema: StructType,</code></pre></details>
+<details class="code" id="ev-spk-initial-source"><summary>spk-initial-source · KafkaMicroBatchStream.scala:370</summary><p>Fresh source initial offsets are chosen once and written to source metadata; existing metadata is reused.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L370">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala</a></p><pre class="guide-pre"><code>370    private def getOrCreateInitialPartitionOffsets(): PartitionOffsetMap = {
+371      // SparkSession is required for getting Hadoop configuration for writing to checkpoints
+372      assert(SparkSession.getActiveSession.nonEmpty)
+373
+374      val metadataLog =
+375        new KafkaSourceInitialOffsetWriter(SparkSession.getActiveSession.get, metadataPath)
+376      metadataLog.get(0).getOrElse {
+377        val offsets = startingOffsets match {
+378          case EarliestOffsetRangeLimit =&gt;
+379            KafkaSourceOffset(kafkaOffsetReader.fetchEarliestOffsets())
+380          case LatestOffsetRangeLimit =&gt;
+381            KafkaSourceOffset(kafkaOffsetReader.fetchLatestOffsets(None))
+382          case o: SpecificOffsetRangeLimit =&gt;
+383            kafkaOffsetReader.fetchSpecificOffsets(o, reportDataLoss)
+384          case SpecificTimestampRangeLimit(p, strategy) =&gt;
+385            kafkaOffsetReader.fetchSpecificTimestampBasedOffsets(p,
+386              isStartingOffsets = true, strategy)
+387          case GlobalTimestampRangeLimit(ts, strategy) =&gt;
+388            kafkaOffsetReader.fetchGlobalTimestampBasedOffsets(ts,
+389              isStartingOffsets = true, strategy)
+390        }
+391        metadataLog.add(0, offsets)
+392        logInfo(log&quot;Initial offsets: ${MDC(OFFSETS, offsets)}&quot;)
+393        offsets
+394      }.partitionToOffsets
+395    }
+396
+397    /** Proportionally distribute limit number of offsets among topicpartitions */</code></pre></details>
+<details class="code" id="ev-spk-no-kafka-commit"><summary>spk-no-kafka-commit · KafkaMicroBatchStream.scala:339</summary><p>The Kafka V2 source commit lifecycle hook does not commit Kafka group offsets.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L339">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala</a></p><pre class="guide-pre"><code>339    override def commit(end: Offset): Unit = {}
+340
+341    override def stop(): Unit = {
+342      kafkaOffsetReader.close()
+343    }
+344
+345    override def toString(): String = s&quot;KafkaV2[$kafkaOffsetReader]&quot;
+346
+347    override def metrics(latestConsumedOffset: Optional[Offset]): ju.Map[String, String] = {
+348      val reCalculatedLatestPartitionOffsets =
+349        if (inRealTimeMode) {
+350          if (!latestConsumedOffset.isPresent) {
+351            // this means a batch has no end offsets, which should not happen
+352            None
+353          } else {
+354            Some {
+355              kafkaOffsetReader.fetchLatestOffsets(
+356                Some(latestConsumedOffset.get.asInstanceOf[KafkaSourceOffset].partitionToOffsets))
+357            }
+358          }
+359        } else {
+360          Option(latestPartitionOffsets)
+361        }
+362
+363        KafkaMicroBatchStream.metrics(latestConsumedOffset, reCalculatedLatestPartitionOffsets)
+364    }
+365
+366    /**</code></pre></details>
+<details class="code" id="ev-spk-v1-commit"><summary>spk-v1-commit · Source.scala:67</summary><p>V1 Source supplies an empty ordinary source-commit callback; KafkaSource does not add a group-offset commit.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/Source.scala#L67">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/Source.scala</a></p><pre class="guide-pre"><code>67    def commit(end: Offset) : Unit = {}
+68
+69    override def initialOffset(): OffsetV2 = {
+70      throw new IllegalStateException(&quot;should not be called.&quot;)
+71    }
+72
+73    override def deserializeOffset(json: String): OffsetV2 = {
+74      throw new IllegalStateException(&quot;should not be called.&quot;)
+75    }
+76
+77    override def commit(end: OffsetV2): Unit = {
+78      throw new IllegalStateException(&quot;should not be called.&quot;)
+79    }
+80  }
+81</code></pre></details>
+<details class="code" id="ev-spk-kafka-config"><summary>spk-kafka-config · KafkaSourceProvider.scala:335</summary><p>Kafka source rejects user auto-commit configuration and disables internal auto commit.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L335">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala</a></p><pre class="guide-pre"><code>335        ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, // committing correctly requires new APIs in Source
+336        ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG) // interceptors can modify payload, so not safe
+337
+338      otherUnsupportedConfigs.foreach { c =&gt;
+339        if (params.contains(s&quot;kafka.$c&quot;)) {
+340          throw new IllegalArgumentException(s&quot;Kafka option '$c' is not supported&quot;)
+341        }
+342      }
+343
+344      if (!params.contains(s&quot;kafka.${ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG}&quot;)) {
+345        throw new IllegalArgumentException(
+346          s&quot;Option 'kafka.${ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG}' must be specified for &quot; +
+347            s&quot;configuring Kafka consumer&quot;)
+348      }
+349
+350      if (params.contains(MIN_OFFSET_PER_TRIGGER) &amp;&amp; params.contains(MAX_OFFSET_PER_TRIGGER)) {
+351        val minOffsets = params.get(MIN_OFFSET_PER_TRIGGER).get.toLong
+352        val maxOffsets = params.get(MAX_OFFSET_PER_TRIGGER).get.toLong
+353        if (minOffsets &gt; maxOffsets) {
+354          throw new IllegalArgumentException(s&quot;The value of minOffsetPerTrigger($minOffsets) is &quot; +
+355            s&quot;higher than the maxOffsetsPerTrigger($maxOffsets).&quot;)
+356        }
+357      }
+358    }
+359
+360    private def validateStreamOptions(params: CaseInsensitiveMap[String]) = {
+361      // Stream specific options
+362      params.get(ENDING_OFFSETS_OPTION_KEY).map(_ =&gt;</code></pre></details>
+<details class="code" id="ev-spk-producer-options"><summary>spk-producer-options · KafkaSourceProvider.scala:788</summary><p>The Kafka sink passes user producer parameters through and sets serializers; acknowledgments and broker durability policy remain deployment choices.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L788">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala</a></p><pre class="guide-pre"><code>788    private[kafka010] def kafkaParamsForProducer(
+789        params: CaseInsensitiveMap[String]): ju.Map[String, Object] = {
+790      if (params.contains(s&quot;kafka.${ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG}&quot;)) {
+791        throw new IllegalArgumentException(
+792          s&quot;Kafka option '${ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG}' is not supported as keys &quot;
+793            + &quot;are serialized with ByteArraySerializer.&quot;)
+794      }
+795
+796      if (params.contains(s&quot;kafka.${ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG}&quot;)) {
+797        throw new IllegalArgumentException(
+798          s&quot;Kafka option '${ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG}' is not supported as &quot;
+799            + &quot;value are serialized with ByteArraySerializer.&quot;)
+800      }
+801
+802      val specifiedKafkaParams = convertToSpecifiedParams(params)
+803
+804      KafkaConfigUpdater(&quot;executor&quot;, specifiedKafkaParams)
+805        .set(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, serClassName)
+806        .set(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, serClassName)
+807        .build()
+808    }
+809
+810    private def convertToSpecifiedParams(parameters: Map[String, String]): Map[String, String] = {
+811      // Optional operator-configured denylist of Kafka client option names (without the &quot;kafka.&quot;
+812      // prefix). Empty by default, which allows every option and preserves the previous behavior.
+813      val disallowed = SQLConf.get.getConf(StaticSQLConf.KAFKA_DISALLOWED_OPTIONS)
+814        .map(_.toLowerCase(Locale.ROOT)).toSet
+815      val stripped = parameters</code></pre></details>
+<details class="code" id="ev-spk-query-identity"><summary>spk-query-identity · StreamExecution.scala:188</summary><p>Query identity comes from checkpoint metadata, whereas runId is randomly generated for a new run.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala#L188">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/StreamExecution.scala</a></p><pre class="guide-pre"><code>188    override val id: UUID = UUID.fromString(streamMetadata.id)
+189
+190    override val runId: UUID = UUID.randomUUID
+191
+192    protected val progressReporter = new ProgressReporter(sparkSession, triggerClock,
+193      () =&gt; logicalPlan)
+194
+195    /**
+196     * Pretty identified string of printing in logs. Format is
+197     * If name is set &quot;queryName [id = xyz, runId = abc]&quot; else &quot;[id = xyz, runId = abc]&quot;
+198     */
+199    protected val prettyIdString =
+200      Option(name).map(_ + &quot; &quot;).getOrElse(&quot;&quot;) + s&quot;[id = $id, runId = $runId]&quot;
+201
+202    /**
+203     * A list of unique sources in the query plan. This will be set when generating logical plan.
+204     */
+205    @volatile protected var uniqueSources: Map[SparkDataStream, ReadLimit] = Map.empty
+206
+207    /** Defines the internal state of execution */
+208    protected val state = new AtomicReference[State](INITIALIZING)
+209
+210    def lastExecution: IncrementalExecution = getLatestExecutionContext().executionPlan
+211
+212    @volatile
+213    protected var streamDeathCause: StreamingQueryException = null
+214
+215    /* Get the call site in the caller thread; will pass this into the micro batch thread */</code></pre></details>
+<details class="code" id="ev-spk-batch-sink"><summary>spk-batch-sink · MicroBatchExecution.scala:1327</summary><p>The driver executes the sink and awaits the required work before writing the query completion log.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1327">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1327              s.addBatch(execCtx.batchId, nextBatch)
+1328              // DSv2 write node has a mechanism to invalidate DSv2 relation, but there is no
+1329              // corresponding one for DSv1. Given we have an information of catalog table for sink,
+1330              // we can refresh the catalog table once the write has succeeded.
+1331              plan.catalogTable.foreach { tbl =&gt;
+1332                sparkSession.catalog.refreshTable(tbl.identifier.quotedString)
+1333              }
+1334            case _: SupportsWrite =&gt;
+1335              // This doesn't accumulate any data - it just forces execution of the microbatch writer.
+1336              nextBatch.collect()
+1337          }
+1338          execCtx.executionPlan.executedPlan match {
+1339            case w: WriteToDataSourceV2Exec =&gt; w.commitProgress
+1340            case _ =&gt; None
+1341          }
+1342        }
+1343      }
+1344
+1345      withProgressLocked {
+1346        execCtx.sinkCommitProgress = batchSinkProgress
+1347        markMicroBatchEnd(execCtx)
+1348      }
+1349      logDebug(s&quot;Completed batch ${execCtx.batchId}&quot;)
+1350    }
+1351
+1352
+1353    /**
+1354     * Called at the start of the micro batch with given offsets. It takes care of offset</code></pre></details>
+<details class="code" id="ev-spk-batch-complete"><summary>spk-batch-complete · MicroBatchExecution.scala:1558</summary><p>After sink success, markMicroBatchEnd publishes query completion metadata and advances committed offsets.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1558">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1558        if (!commitLog.add(execCtx.batchId, metadata)) {
+1559          throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+1560        }
+1561      }
+1562      signalProcessAllAvailableIfRealTimeMode(execCtx)
+1563      committedOffsets ++= execCtx.endOffsets
+1564    }
+1565
+1566    /**
+1567     * When running in RealTimeTrigger mode, this method extracts the end offsets after the current
+1568     * batch has finished execution and writes them to the execution context. In real-time mode the
+1569     * end offsets are not known up front; they are gathered from all [[RealTimeStreamScanExec]]
+1570     * nodes (i.e. tasks that execute a source partition), merged, and recorded on the context so
+1571     * they can subsequently be written to the offset log.
+1572     */
+1573    protected def populateBatchOffsetsForRTM(execCtx: MicroBatchExecutionContext): Unit = {
+1574      assert(trigger.isInstanceOf[RealTimeTrigger])
+1575
+1576      val execs = StreamingQueryPlanTraverseHelper
+1577        .collectFromUnfoldedPlan(lastExecution.executedPlan) {
+1578        case e: RealTimeStreamScanExec =&gt; e
+1579      }
+1580
+1581      val endOffsetMap = MutableMap[SparkDataStream, OffsetV2]()
+1582      execs.foreach { e =&gt;
+1583        val lowLatencyExec = e.asInstanceOf[RealTimeStreamScanExec]
+1584        val accus: Seq[PartitionOffsetWithIndex] =
+1585          lowLatencyExec.endOffsetsAccumulator.value.asScala.toSeq</code></pre></details>
+<details class="code" id="ev-spk-driver-recovery"><summary>spk-driver-recovery · MicroBatchExecution.scala:808</summary><p>Recovery compares planned and completed batch logs to replay the latest incomplete batch or advance.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L808">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>808    protected def populateStartOffsets(
+809        execCtx: MicroBatchExecutionContext,
+810        sparkSessionToRunBatches: SparkSession): Unit = {
+811      execCtx.sinkCommitProgress = None
+812      offsetLog.getLatest() match {
+813        case Some((latestBatchId, nextOffsets)) =&gt;
+814          /* First assume that we are re-executing the latest known batch
+815           * in the offset log */
+816          execCtx.batchId = latestBatchId
+817          execCtx.isCurrentBatchConstructed = true
+818          execCtx.endOffsets = nextOffsets.toStreamProgress(sources, sourceIdMap)
+819
+820          // validate the integrity of offset log and get the previous offset from the offset log
+821          val secondLatestOffsets = validateOffsetLogAndGetPrevOffset(latestBatchId)
+822          secondLatestOffsets.foreach { offset =&gt;
+823            execCtx.startOffsets = offset.toStreamProgress(sources, sourceIdMap)
+824          }
+825
+826          // update offset metadata
+827          nextOffsets.metadataOpt.foreach { metadata =&gt;
+828            OffsetSeqMetadata.setSessionConf(metadata, sparkSessionToRunBatches.sessionState.conf)
+829            execCtx.offsetSeqMetadata = OffsetSeqMetadata(
+830              metadata.batchWatermarkMs, metadata.batchTimestampMs, sparkSessionToRunBatches.conf)
+831            watermarkTracker = WatermarkTracker(sparkSessionToRunBatches.conf, logicalPlan)
+832            watermarkTracker.setWatermark(metadata.batchWatermarkMs)
+833          }
+834
+835          /* identify the current batch id: if commit log indicates we successfully processed the</code></pre></details>
+<details class="code" id="ev-spk-log-atomic"><summary>spk-log-atomic · HDFSMetadataLog.scala:208</summary><p>Batch metadata publication uses the configured checkpoint file manager atomic-write contract.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/HDFSMetadataLog.scala#L208">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/HDFSMetadataLog.scala</a></p><pre class="guide-pre"><code>208      val output = fileManager.createAtomic(batchMetadataFile, overwriteIfPossible = false)
+209      try {
+210        fn(output)
+211        output.close()
+212      } catch {
+213        case e: FileAlreadyExistsException =&gt;
+214          output.cancel()
+215          // If next batch file already exists, then another concurrently running query has
+216          // written it.
+217          throw QueryExecutionErrors.multiStreamingQueriesUsingPathConcurrentlyError(path, e)
+218        case e: Throwable =&gt;
+219          output.cancel()
+220          throw e
+221      }
+222    }
+223
+224    /**
+225     * Store the metadata for the specified batchId and return `true` if successful. This method
+226     * fills the content of metadata via executing function. If the function throws an exception,
+227     * writing will be automatically cancelled and this method will propagate the exception.
+228     *
+229     * If the batchId's metadata has already been stored, this method will return `false`.
+230     *
+231     * Writing the metadata is done by writing a batch to a temp file then rename it to the batch
+232     * file.
+233     *
+234     * There may be multiple [[HDFSMetadataLog]] using the same metadata path. Although it is not a
+235     * valid behavior, we still need to prevent it from destroying the files.</code></pre></details>
+<details class="code" id="ev-spk-file-manager"><summary>spk-file-manager · CheckpointFileManager.scala:66</summary><p>The file manager requires complete-file atomic visibility with close or cancellation semantics.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala#L66">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala</a></p><pre class="guide-pre"><code>66    def createAtomic(path: Path, overwriteIfPossible: Boolean): CancellableFSDataOutputStream
+67
+68    /** Open a file for reading, or throw exception if it does not exist. */
+69    def open(path: Path): FSDataInputStream
+70
+71    /** List the files/directories in a path that match a filter. */
+72    def list(path: Path, filter: PathFilter): Array[FileStatus]
+73
+74    /** List all the files/directories in a path. */
+75    def list(path: Path): Array[FileStatus] = {
+76      list(path, (_: Path) =&gt; true)
+77    }
+78
+79    /** Make directory at the give path and all its parent directories as needed. */
+80    def mkdirs(path: Path): Unit
+81
+82    /** Whether path exists */
+83    def exists(path: Path): Boolean
+84
+85    /** Recursively delete a path if it exists. Should not throw exception if file doesn't exist. */
+86    def delete(path: Path): Unit
+87
+88    /** Is the default file system this implementation is operating on the local file system. */
+89    def isLocal: Boolean
+90
+91    /**
+92     * Creates the checkpoint path if it does not exist, and returns the qualified
+93     * checkpoint path.</code></pre></details>
+<details class="code" id="ev-spk-rename-manager"><summary>spk-rename-manager · CheckpointFileManager.scala:155</summary><p>The rename-based stream closes the temporary output and publishes it as the final checkpoint file.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala#L155">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/checkpointing/CheckpointFileManager.scala</a></p><pre class="guide-pre"><code>155      override def close(): Unit = synchronized {
+156        try {
+157          if (terminated) return
+158          underlyingStream.close()
+159          try {
+160            fm.renameTempFile(tempPath, finalPath, overwriteIfPossible)
+161          } catch {
+162            case fe: FileAlreadyExistsException =&gt;
+163              logWarning(log&quot;Failed to rename temp file ${MDC(TEMP_PATH, tempPath)} to &quot; +
+164                log&quot;${MDC(PATH, finalPath)} because file exists&quot;, fe)
+165              if (!overwriteIfPossible) throw fe
+166          }
+167
+168          // Optionally, check if the renamed file exists
+169          if (SQLConf.get.checkpointRenamedFileCheck &amp;&amp; !fm.exists(finalPath)) {
+170            throw new IllegalStateException(s&quot;Renamed temp file $tempPath to $finalPath. &quot; +
+171              s&quot;But $finalPath does not exist.&quot;)
+172          }
+173
+174          logInfo(log&quot;Renamed temp file ${MDC(TEMP_PATH, tempPath)} to &quot; +
+175            log&quot;${MDC(FINAL_PATH, finalPath)}&quot;)
+176        } finally {
+177          terminated = true
+178        }
+179      }
+180
+181      override def cancel(): Unit = synchronized {
+182        try {</code></pre></details>
+<details class="code" id="ev-spk-kafka-send"><summary>spk-kafka-send · KafkaWriteTask.scala:115</summary><p>Kafka output sends happen during executor row processing, before Spark task completion.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaWriteTask.scala#L115">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaWriteTask.scala</a></p><pre class="guide-pre"><code>115      producer.send(record, callback)
+116    }
+117
+118    protected def checkForErrors(): Unit = {
+119      if (failedWrite != null) {
+120        throw failedWrite
+121      }
+122    }
+123
+124    private def createProjection = {
+125      UnsafeProjection.create(
+126        Seq(
+127          KafkaWriter.topicExpression(inputSchema, topic),
+128          Cast(KafkaWriter.keyExpression(inputSchema), BinaryType),
+129          Cast(KafkaWriter.valueExpression(inputSchema), BinaryType),
+130          KafkaWriter.headersExpression(inputSchema),
+131          KafkaWriter.partitionExpression(inputSchema)
+132        ),
+133        inputSchema
+134      )
+135    }
+136  }
+137
+138</code></pre></details>
+<details class="code" id="ev-spk-kafka-task-commit"><summary>spk-kafka-task-commit · KafkaDataWriter.scala:58</summary><p>Kafka task writer flushes and checks errors; abort is empty and does not roll back records.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala#L58">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala</a></p><pre class="guide-pre"><code>58    def commit(): WriterCommitMessage = {
+59      // Send is asynchronous, but we can't commit until all rows are actually in Kafka.
+60      // This requires flushing and then checking that no callbacks produced errors.
+61      // We also check for errors before to fail as soon as possible - the check is cheap.
+62      checkForErrors()
+63      producer.foreach(_.producer.flush())
+64      checkForErrors()
+65      KafkaDataWriterCommitMessage
+66    }
+67
+68    def abort(): Unit = {}
+69
+70    def close(): Unit = {
+71      producer.foreach(InternalKafkaProducerPool.release)
+72      producer = None
+73    }
+74  }
+75</code></pre></details>
+<details class="code" id="ev-spk-kafka-driver-commit"><summary>spk-kafka-driver-commit · KafkaStreamingWrite.scala:49</summary><p>Kafka streaming bypasses Spark task commit arbitration and its driver commit hook is empty.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaStreamingWrite.scala#L49">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaStreamingWrite.scala</a></p><pre class="guide-pre"><code>49    override def useCommitCoordinator(): Boolean = false
+50
+51    override def commit(epochId: Long, messages: Array[WriterCommitMessage]): Unit = {}
+52    override def abort(epochId: Long, messages: Array[WriterCommitMessage]): Unit = {}
+53  }
+54
+55  /**
+56   * A [[StreamingDataWriterFactory]] for Kafka writing. Will be serialized and sent to executors to
+57   * generate the per-task data writers.
+58   * @param topic The topic that should be written to. If None, topic will be inferred from
+59   *              a `topic` field in the incoming data.
+60   * @param producerParams Parameters for Kafka producers in each task.
+61   * @param schema The schema of the input data.
+62   */
+63  private case class KafkaStreamWriterFactory(
+64      topic: Option[String],
+65      producerParams: ju.Map[String, Object],
+66      schema: StructType)
+67    extends StreamingDataWriterFactory {
+68
+69    override def createWriter(
+70        partitionId: Int,
+71        taskId: Long,
+72        epochId: Long): DataWriter[InternalRow] = {
+73      new KafkaDataWriter(topic, producerParams, DataTypeUtils.toAttributes(schema))
+74    }
+75  }
+76</code></pre></details>
+<details class="code" id="ev-spk-writer-authorization"><summary>spk-writer-authorization · WriteToDataSourceV2Exec.scala:697</summary><p>Rows are written before optional task commit authorization; authorization cannot undo earlier external effects.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/WriteToDataSourceV2Exec.scala#L697">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/WriteToDataSourceV2Exec.scala</a></p><pre class="guide-pre"><code>697        write(dataWriter, iterWithMetrics)
+698
+699        CustomMetrics.updateMetrics(
+700          dataWriter.currentMetricsValues.toImmutableArraySeq, customMetrics)
+701
+702        val msg = if (useCommitCoordinator) {
+703          val coordinator = SparkEnv.get.outputCommitCoordinator
+704          val commitAuthorized = coordinator.canCommit(stageId, stageAttempt, partId, attemptId)
+705          if (commitAuthorized) {
+706            logInfo(log&quot;Commit authorized for partition ${MDC(LogKeys.PARTITION_ID, partId)} &quot; +
+707              log&quot;(task ${MDC(LogKeys.TASK_ID, taskId)}, &quot; +
+708              log&quot;attempt ${MDC(LogKeys.TASK_ATTEMPT_ID, attemptId)}, &quot; +
+709              log&quot;stage ${MDC(LogKeys.STAGE_ID, stageId)}.&quot; +
+710              log&quot;${MDC(LogKeys.STAGE_ATTEMPT_ID, stageAttempt)})&quot;)
+711
+712            dataWriter.commit()
+713          } else {
+714            val commitDeniedException = QueryExecutionErrors.commitDeniedError(
+715              partId, taskId, attemptId, stageId, stageAttempt)
+716            logInfo(log&quot;${MDC(LogKeys.ERROR, commitDeniedException.getMessage)}&quot;)
+717            // throwing CommitDeniedException will trigger the catch block for abort
+718            throw commitDeniedException
+719          }
+720
+721        } else {
+722          logInfo(log&quot;Writer for partition ${MDC(LogKeys.PARTITION_ID, context.partitionId())} &quot; +
+723            log&quot;is committing.&quot;)
+724          dataWriter.commit()</code></pre></details>
+<details class="code" id="ev-spk-commit-arbitration"><summary>spk-commit-arbitration · OutputCommitCoordinator.scala:100</summary><p>The driver arbitrates task-attempt commit permission; this is not a durable transaction with the query checkpoint.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/OutputCommitCoordinator.scala#L100">spark/core/src/main/scala/org/apache/spark/scheduler/OutputCommitCoordinator.scala</a></p><pre class="guide-pre"><code>100      val msg = AskPermissionToCommitOutput(stage, stageAttempt, partition, attemptNumber)
+101      coordinatorRef match {
+102        case Some(endpointRef) =&gt;
+103          ThreadUtils.awaitResult(endpointRef.ask[Boolean](msg),
+104            RpcUtils.askRpcTimeout(conf).duration)
+105        case None =&gt;
+106          logError(
+107            &quot;canCommit called after coordinator was stopped (is SparkEnv shutdown in progress)?&quot;)
+108          false
+109      }
+110    }
+111
+112    /**
+113     * Called by the DAGScheduler when a stage starts. Initializes the stage's state if it hasn't
+114     * yet been initialized.
+115     *
+116     * @param stage the stage id.
+117     * @param maxPartitionId the maximum partition id that could appear in this stage's tasks (i.e.
+118     *                       the maximum possible value of `context.partitionId`).
+119     */
+120    private[scheduler] def stageStart(stage: Int, maxPartitionId: Int): Unit = synchronized {
+121      stageStates.get(stage) match {
+122        case Some(state) =&gt;
+123          require(state.authorizedCommitters.length == maxPartitionId + 1)
+124          logInfo(log&quot;Reusing state from previous attempt of stage ${MDC(LogKeys.STAGE_ID, stage)}&quot;)
+125
+126        case _ =&gt;
+127          stageStates(stage) = new StageState(maxPartitionId + 1)</code></pre></details>
+<details class="code" id="ev-spk-file-sink"><summary>spk-file-sink · FileStreamSink.scala:154</summary><p>The file sink can skip output batches already present in its durable sink manifest log.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sinks/FileStreamSink.scala#L154">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sinks/FileStreamSink.scala</a></p><pre class="guide-pre"><code>154      if (batchId &lt;= fileLog.getLatestBatchId().getOrElse(-1L)) {
+155        logInfo(log&quot;Skipping already committed batch ${MDC(BATCH_ID, batchId)}&quot;)
+156      } else {
+157        val committer = FileCommitProtocol.instantiate(
+158          className = sparkSession.sessionState.conf.streamingFileCommitProtocolClass,
+159          jobId = batchId.toString,
+160          outputPath = path)
+161
+162        committer match {
+163          case manifestCommitter: ManifestFileCommitProtocol =&gt;
+164            manifestCommitter.setupManifestOptions(fileLog, batchId)
+165          case _ =&gt;  // Do nothing
+166        }
+167
+168        // Get the actual partition columns as attributes after matching them by name with
+169        // the given columns names.
+170        val partitionColumns: Seq[Attribute] = partitionColumnNames.map { col =&gt;
+171          val nameEquality = data.sparkSession.sessionState.conf.resolver
+172          data.logicalPlan.output.find(f =&gt; nameEquality(f.name, col)).getOrElse {
+173            throw QueryExecutionErrors.partitionColumnNotFoundInSchemaError(col, data.schema)
+174          }
+175        }
+176        val qe = data.queryExecution
+177
+178        FileFormatWriter.write(
+179          sparkSession = sparkSession,
+180          plan = qe.executedPlan,
+181          fileFormat = fileFormat,</code></pre></details>
+<details class="code" id="ev-spk-file-manifest"><summary>spk-file-manifest · ManifestFileCommitProtocol.scala:78</summary><p>Successful task output files become published logical output through the file sink batch manifest.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/ManifestFileCommitProtocol.scala#L78">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/ManifestFileCommitProtocol.scala</a></p><pre class="guide-pre"><code>78      if (fileLog.add(batchId, fileStatuses)) {
+79        logInfo(log&quot;Committed batch ${MDC(BATCH_ID, batchId)}&quot;)
+80      } else {
+81        // Reaching here means `fileLog.add` found this batchId already committed to the sink
+82        // metadata log at `path`. This is almost always two concurrent streaming queries writing
+83        // to the same output path: they share a single `_spark_metadata` log and cannot coexist.
+84        // Log the path + batchId at ERROR so a recurrence in scheduled jobs is diagnosable from the
+85        // logs alone, without re-reproducing the race.
+86        // Build the message once and reuse it for both the log and the exception so they stay in
+87        // sync (see review on SPARK-57651).
+88        val errorMsg = log&quot;Race while writing batch ${MDC(BATCH_ID, batchId)} to the file sink &quot; +
+89          log&quot;metadata log at ${MDC(PATH, path)}: another writer already committed this batch. &quot; +
+90          log&quot;This usually means multiple concurrent streaming queries are writing to the same &quot; +
+91          log&quot;output path (they share one _spark_metadata log).&quot;
+92        logError(errorMsg)
+93        throw new IllegalStateException(errorMsg.message)
+94      }
+95    }
+96
+97    override def abortJob(jobContext: JobContext): Unit = {
+98      require(fileLog != null, &quot;setupManifestOptions must be called before this function&quot;)
+99      // Best effort cleanup of complete files from failed job.
+100      // Since the file has UUID in its filename, we are safe to try deleting them
+101      // as the file will not conflict with file with another attempt on the same task.
+102      if (pendingCommitFiles.nonEmpty) {
+103        pendingCommitFiles.foreach { path =&gt;
+104          try {
+105            val fs = path.getFileSystem(jobContext.getConfiguration)</code></pre></details>
+<details class="code" id="ev-spk-foreach-batch"><summary>spk-foreach-batch · ForeachBatchSink.scala:49</summary><p>User code receives the Dataset and batch ID and supplies the destination success/transaction contract.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSink.scala#L49">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSink.scala</a></p><pre class="guide-pre"><code>49      callBatchWriter(ds, batchId)
+50    }
+51
+52    override def toString(): String = &quot;ForeachBatchSink&quot;
+53
+54    private def callBatchWriter(ds: Dataset[T], batchId: Long): Unit = {
+55      try {
+56        batchWriter(ds, batchId)
+57      } catch {
+58        // The user code can throw any type of exception.
+59        case NonFatal(e) if !e.isInstanceOf[SparkThrowable] =&gt;
+60          throw ForeachBatchUserFuncException(e)
+61      }
+62    }
+63  }
+64
+65  /**
+66   * Exception that wraps the exception thrown in the user provided function in ForeachBatch sink.
+67   */
+68  private[sql] case class ForeachBatchUserFuncException(cause: Throwable)
+69    extends SparkException(
+70      errorClass = &quot;FOREACH_BATCH_USER_FUNCTION_ERROR&quot;,
+71      messageParameters = Map(&quot;reason&quot; -&gt; Option(cause.getMessage).getOrElse(&quot;&quot;)),
+72      cause = cause)
+73
+74  /**
+75   * Interface that is meant to be extended by Python classes via Py4J.
+76   * Py4J allows Python classes to implement Java interfaces so that the JVM can call back</code></pre></details>
+<details class="code" id="ev-spk-data-loss"><summary>spk-data-loss · KafkaMicroBatchStream.scala:442</summary><p>Detected missing source data throws when failOnDataLoss is enabled and logs otherwise; deleted input is not recreated.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L442">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala</a></p><pre class="guide-pre"><code>442    private def reportDataLoss(message: String, getException: () =&gt; Throwable): Unit = {
+443      if (failOnDataLoss) {
+444        throw getException()
+445      } else {
+446        logWarning(log&quot;${MDC(ERROR, message)}. ${MDC(TIP, INSTRUCTION_FOR_FAIL_ON_DATA_LOSS_FALSE)}&quot;)
+447      }
+448    }
+449
+450    private def verifyEndOffsetForTriggerAvailableNow(
+451        endPartitionOffsets: Map[TopicPartition, Long]): Unit = {
+452      val tpsForPrefetched = allDataForTriggerAvailableNow.keySet
+453      val tpsForEndOffset = endPartitionOffsets.keySet
+454
+455      if (tpsForPrefetched != tpsForEndOffset) {
+456        throw KafkaExceptions.mismatchedTopicPartitionsBetweenEndOffsetAndPrefetched(
+457          tpsForPrefetched, tpsForEndOffset)
+458      }
+459
+460      val endOffsetHasGreaterThanPrefetched = {
+461        allDataForTriggerAvailableNow.keySet.exists { tp =&gt;
+462          val offsetFromPrefetched = allDataForTriggerAvailableNow(tp)
+463          val offsetFromEndOffset = endPartitionOffsets(tp)
+464          offsetFromEndOffset &gt; offsetFromPrefetched
+465        }
+466      }
+467      if (endOffsetHasGreaterThanPrefetched) {
+468        throw KafkaExceptions.endOffsetHasGreaterOffsetForTopicPartitionThanPrefetched(
+469          allDataForTriggerAvailableNow, endPartitionOffsets)</code></pre></details>
+<details class="code" id="ev-spk-test-shuffle-retry"><summary>spk-test-shuffle-retry · DAGSchedulerSuite.scala:1028</summary><p>Inspected test exercises map-output loss, resubmission and successful final results.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/test/scala/org/apache/spark/scheduler/DAGSchedulerSuite.scala#L1028">spark/core/src/test/scala/org/apache/spark/scheduler/DAGSchedulerSuite.scala</a></p><pre class="guide-pre"><code>1028    test(&quot;run trivial shuffle with fetch failure&quot;) {
+1029      val shuffleMapRdd = new MyRDD(sc, 2, Nil)
+1030      val shuffleDep = new ShuffleDependency(shuffleMapRdd, new HashPartitioner(2))
+1031      val shuffleId = shuffleDep.shuffleId
+1032      val reduceRdd = new MyRDD(sc, 2, List(shuffleDep), tracker = mapOutputTracker)
+1033      submit(reduceRdd, Array(0, 1))
+1034      completeShuffleMapStageSuccessfully(0, 0, reduceRdd.partitions.length)
+1035      // the 2nd ResultTask failed
+1036      complete(taskSets(1), Seq(
+1037        (Success, 42),
+1038        (FetchFailed(makeBlockManagerId(&quot;hostA&quot;), shuffleId, 0L, 0, 0, &quot;ignored&quot;), null)))
+1039      verify(blockManagerMaster, times(1)).removeExecutorAsync(&quot;hostA-exec&quot;)
+1040      // ask the scheduler to try it again
+1041      scheduler.resubmitFailedStages()
+1042      // have the 2nd attempt pass
+1043      complete(taskSets(2), Seq((Success, makeMapStatus(&quot;hostA&quot;, reduceRdd.partitions.length))))
+1044      // we can see both result blocks now
+1045      assert(mapOutputTracker.getMapSizesByExecutorId(shuffleId, 0).map(_._1.host).toSet ===
+1046        HashSet(&quot;hostA&quot;, &quot;hostB&quot;))
+1047      completeAndCheckAnswer(taskSets(3), Seq((Success, 43)), Map(0 -&gt; 42, 1 -&gt; 43))
+1048      assertDataStructuresEmpty()
+1049    }
+1050
+1051    private val shuffleFileLossTests = Seq(
+1052      (&quot;executor process lost with shuffle service&quot;, ExecutorProcessLost(&quot;&quot;, None), true, false),
+1053      (&quot;worker lost with shuffle service&quot;, ExecutorProcessLost(&quot;&quot;, Some(&quot;hostA&quot;)), true, true),
+1054      (&quot;worker lost without shuffle service&quot;, ExecutorProcessLost(&quot;&quot;, Some(&quot;hostA&quot;)), false, true),
+1055      (&quot;executor failure with shuffle service&quot;, ExecutorKilled, true, false),</code></pre></details>
+<details class="code" id="ev-spk-test-log-restart"><summary>spk-test-log-restart · HDFSMetadataLogSuite.scala:146</summary><p>Inspected test reconstructs metadata log state from storage after restart.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/HDFSMetadataLogSuite.scala#L146">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/HDFSMetadataLogSuite.scala</a></p><pre class="guide-pre"><code>146    test(&quot;HDFSMetadataLog: restart&quot;) {
+147      withTempDir { temp =&gt;
+148        val metadataLog = new HDFSMetadataLog[String](spark, temp.getAbsolutePath)
+149        assert(metadataLog.add(0, &quot;batch0&quot;))
+150        assert(metadataLog.add(1, &quot;batch1&quot;))
+151        assert(metadataLog.get(0) === Some(&quot;batch0&quot;))
+152        assert(metadataLog.get(1) === Some(&quot;batch1&quot;))
+153        assert(metadataLog.getLatest() === Some(1 -&gt; &quot;batch1&quot;))
+154        assert(metadataLog.get(None, Some(1)) === Array(0 -&gt; &quot;batch0&quot;, 1 -&gt; &quot;batch1&quot;))
+155
+156        val metadataLog2 = new HDFSMetadataLog[String](spark, temp.getAbsolutePath)
+157        assert(metadataLog2.get(0) === Some(&quot;batch0&quot;))
+158        assert(metadataLog2.get(1) === Some(&quot;batch1&quot;))
+159        assert(metadataLog2.getLatest() === Some(1 -&gt; &quot;batch1&quot;))
+160        assert(metadataLog2.get(None, Some(1)) === Array(0 -&gt; &quot;batch0&quot;, 1 -&gt; &quot;batch1&quot;))
+161      }
+162    }
+163
+164    testQuietly(&quot;HDFSMetadataLog: metadata directory collision&quot;) {
+165      withTempDir { temp =&gt;
+166        val waiter = new Waiter()
+167        val maxBatchId = 10
+168        val numThreads = 5
+169        for (id &lt;- 0 until numThreads) {
+170          new UninterruptibleThread(s&quot;HDFSMetadataLog: metadata directory collision - thread $id&quot;) {
+171            override def run(): Unit = waiter {
+172              val metadataLog =
+173                new HDFSMetadataLog[String](spark, temp.getAbsolutePath)</code></pre></details>
+<details class="code" id="ev-spk-test-log-inconsistent"><summary>spk-test-log-inconsistent · MicroBatchExecutionSuite.scala:164</summary><p>Inspected test rejects recovery with missing required batch offset metadata.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L164">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala</a></p><pre class="guide-pre"><code>164    test(&quot;SPARK-38033: SS cannot be started because the commitId and offsetId are inconsistent&quot;) {
+165      val inputData = MemoryStream[Int]
+166      val streamEvent = inputData.toDF().select(&quot;value&quot;)
+167
+168      val resourceUri = this.getClass.getResource(
+169        &quot;/structured-streaming/checkpoint-test-offsetId-commitId-inconsistent/&quot;).toURI
+170
+171      val checkpointDir = Utils.createTempDir().getCanonicalFile
+172      // Copy the checkpoint to a temp dir to prevent changes to the original.
+173      // Not doing this will lead to the test passing on the first run, but fail subsequent runs.
+174      Utils.copyDirectory(new File(resourceUri), checkpointDir)
+175
+176      // Disable this check so it fails where we throw the exception we are verifying
+177      withSQLConf(SQLConf.STREAMING_CHECK_UNFINISHED_REPARTITION_ON_RESTART.key -&gt; &quot;false&quot;) {
+178        testStream(streamEvent) (
+179          AddData(inputData, 1, 2, 3, 4, 5, 6),
+180          StartStream(Trigger.AvailableNow(), checkpointLocation = checkpointDir.getAbsolutePath),
+181          ExpectFailure[IllegalStateException] { e =&gt;
+182            assert(e.getMessage.contains(&quot;batch 3 doesn't exist&quot;))
+183          }
+184        )
+185      }
+186    }
+187
+188    test(&quot;no-data-batch re-executed after restart should call V1 source.getBatch()&quot;) {
+189      val testSource = ReExecutedBatchTestSource(spark)
+190      val df = testSource.toDF()
+191        .withColumn(&quot;eventTime&quot;, timestamp_seconds($&quot;value&quot;))</code></pre></details>
+<details class="code" id="ev-spk-test-file-abort"><summary>spk-test-file-abort · FileStreamSinkSuite.scala:504</summary><p>Inspected failure test covers cleanup and unpublished files after task/job failure.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/streaming/FileStreamSinkSuite.scala#L504">spark/sql/core/src/test/scala/org/apache/spark/sql/streaming/FileStreamSinkSuite.scala</a></p><pre class="guide-pre"><code>504    testQuietly(&quot;cleanup complete but invalid output for aborted job&quot;) {
+505      withSQLConf((&quot;spark.sql.streaming.commitProtocolClass&quot;,
+506        classOf[PendingCommitFilesTrackingManifestFileCommitProtocol].getCanonicalName)) {
+507        withTempDir { tempDir =&gt;
+508          val checkpointDir = new File(tempDir, &quot;chk&quot;)
+509          val outputDir = new File(tempDir, &quot;output @#output&quot;)
+510          val inputData = MemoryStream[Int]
+511          inputData.addData(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+512          val q = inputData.toDS()
+513            .repartition(10)
+514            .map { value =&gt;
+515              // we intend task failure after some tasks succeeds
+516              if (value == 5) {
+517                // put some delay to let other task commits before this task fails
+518                Thread.sleep(100)
+519                value / 0
+520              } else {
+521                value
+522              }
+523            }
+524            .writeStream
+525            .option(&quot;checkpointLocation&quot;, checkpointDir.getCanonicalPath)
+526            .format(&quot;parquet&quot;)
+527            .start(outputDir.getCanonicalPath)
+528
+529          intercept[StreamingQueryException] {
+530            try {
+531              q.processAllAvailable()</code></pre></details>
+<details class="code" id="ev-spk-test-task-arbitration"><summary>spk-test-task-arbitration · OutputCommitCoordinatorSuite.scala:172</summary><p>Inspected test distinguishes valid task-commit permission release from an unauthorized task failure.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/test/scala/org/apache/spark/scheduler/OutputCommitCoordinatorSuite.scala#L172">spark/core/src/test/scala/org/apache/spark/scheduler/OutputCommitCoordinatorSuite.scala</a></p><pre class="guide-pre"><code>172    test(&quot;Only authorized committer failures can clear the authorized committer lock (SPARK-6614)&quot;) {
+173      val stage: Int = 1
+174      val stageAttempt: Int = 1
+175      val partition: Int = 2
+176      val authorizedCommitter: Int = 3
+177      val nonAuthorizedCommitter: Int = 100
+178      outputCommitCoordinator.stageStart(stage, maxPartitionId = 2)
+179
+180      assert(outputCommitCoordinator.canCommit(stage, stageAttempt, partition, authorizedCommitter))
+181      assert(!outputCommitCoordinator.canCommit(stage, stageAttempt, partition,
+182        nonAuthorizedCommitter))
+183      // The non-authorized committer fails
+184      outputCommitCoordinator.taskCompleted(stage, stageAttempt, partition,
+185        attemptNumber = nonAuthorizedCommitter, reason = TaskKilled(&quot;test&quot;))
+186      // New tasks should still not be able to commit because the authorized committer has not failed
+187      assert(!outputCommitCoordinator.canCommit(stage, stageAttempt, partition,
+188        nonAuthorizedCommitter + 1))
+189      // The authorized committer now fails, clearing the lock
+190      outputCommitCoordinator.taskCompleted(stage, stageAttempt, partition,
+191        attemptNumber = authorizedCommitter, reason = TaskKilled(&quot;test&quot;))
+192      // A new task should now be allowed to become the authorized committer
+193      assert(outputCommitCoordinator.canCommit(stage, stageAttempt, partition,
+194        nonAuthorizedCommitter + 2))
+195      // There can only be one authorized committer
+196      assert(!outputCommitCoordinator.canCommit(stage, stageAttempt, partition,
+197        nonAuthorizedCommitter + 3))
+198    }
+199</code></pre></details>
+<details class="code" id="ev-spk-state-version"><summary>spk-state-version · IncrementalExecution.scala:169</summary><p>Stateful operation info uses currentBatchId as the state version supplied to its tasks.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala#L169">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/IncrementalExecution.scala</a></p><pre class="guide-pre"><code>169    private def nextStatefulOperationStateInfo(): StatefulOperatorStateInfo = {
+170      val operatorId = statefulOperatorId.getAndIncrement()
+171      // TODO When state store checkpoint format V2 is used, after state store checkpoint ID is
+172      // stored to the commit logs, we should assert the ID is not empty if it is not batch 0
+173      val ret = StatefulOperatorStateInfo(
+174        checkpointLocation,
+175        runId,
+176        operatorId,
+177        currentBatchId,
+178        numStateStores,
+179        stateSchemaMetadatas.get(operatorId),
+180        currentStateStoreCkptId.get(operatorId))
+181      ret
+182    }
+183
+184    sealed trait SparkPlanPartialRule {
+185      val rule: PartialFunction[SparkPlan, SparkPlan]
+186    }
+187
+188    object ShufflePartitionsRule extends SparkPlanPartialRule {
+189      override val rule: PartialFunction[SparkPlan, SparkPlan] = {
+190        // NOTE: we should include all aggregate execs here which are used in streaming aggregations
+191        case a: SortAggregateExec if a.isStreaming =&gt;
+192          a.copy(numShufflePartitions = Some(numStateStores))
+193
+194        case a: HashAggregateExec if a.isStreaming =&gt;
+195          a.copy(numShufflePartitions = Some(numStateStores))
+196</code></pre></details>
+<details class="code" id="ev-spk-state-coordinator"><summary>spk-state-coordinator · StateStoreCoordinator.scala:146</summary><p>The driver registers an RPC endpoint for active state-provider locations and coordination metadata.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreCoordinator.scala#L146">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreCoordinator.scala</a></p><pre class="guide-pre"><code>146    def forDriver(env: SparkEnv, sqlConf: SQLConf): StateStoreCoordinatorRef = synchronized {
+147      try {
+148        val coordinator = new StateStoreCoordinator(env.rpcEnv, sqlConf)
+149        val coordinatorRef = env.rpcEnv.setupEndpoint(endpointName, coordinator)
+150        logInfo(&quot;Registered StateStoreCoordinator endpoint&quot;)
+151        new StateStoreCoordinatorRef(coordinatorRef)
+152      } catch {
+153        case e: IllegalArgumentException =&gt;
+154          val rpcEndpointRef = RpcUtils.makeDriverRef(endpointName, env.conf, env.rpcEnv)
+155          logDebug(&quot;Retrieved existing StateStoreCoordinator endpoint&quot;)
+156          new StateStoreCoordinatorRef(rpcEndpointRef)
+157      }
+158    }
+159
+160    def forExecutor(env: SparkEnv): StateStoreCoordinatorRef = synchronized {
+161      val rpcEndpointRef = RpcUtils.makeDriverRef(endpointName, env.conf, env.rpcEnv)
+162      logDebug(&quot;Retrieved existing StateStoreCoordinator endpoint&quot;)
+163      new StateStoreCoordinatorRef(rpcEndpointRef)
+164    }
+165  }
+166
+167  /**
+168   * Reference to a [[StateStoreCoordinator]] that can be used to coordinate instances of
+169   * [[StateStore]]s across all the executors, and get their locations for job scheduling.
+170   */
+171  class StateStoreCoordinatorRef private(rpcEndpointRef: RpcEndpointRef) {
+172
+173    private[sql] def reportActiveInstance(</code></pre></details>
+<details class="code" id="ev-spk-hdfs-state-commit"><summary>spk-hdfs-state-commit · HDFSBackedStateStoreProvider.scala:635</summary><p>State updates publish the next version through the checkpoint file manager before caching it.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala#L635">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala</a></p><pre class="guide-pre"><code>635    private def commitUpdates(
+636        newVersion: Long,
+637        map: HDFSBackedStateStoreMap,
+638        output: DataOutputStream,
+639        shouldForceSnapshot: Boolean = false): Unit = {
+640      synchronized {
+641        finalizeDeltaFile(output)
+642        if (shouldForceSnapshot) {
+643          writeSnapshotFile(newVersion, map, &quot;commit&quot;)
+644        }
+645        putStateIntoStateCacheMap(newVersion, map)
+646      }
+647    }
+648
+649    /**
+650     * Get iterator of all the data of the latest version of the store.
+651     * Note that this will look up the files to determined the latest known version.
+652     */
+653    private[state] def latestIterator(): Iterator[UnsafeRowPair] = synchronized {
+654      val storeFiles = fetchFiles()._1
+655      val versionsInFiles = storeFiles.map(_.version).toSet
+656      val versionsLoaded = loadedMaps.keySet.asScala
+657      val allKnownVersions = versionsInFiles ++ versionsLoaded
+658      if (allKnownVersions.nonEmpty) {
+659        loadMap(allKnownVersions.max).iterator()
+660      } else Iterator.empty
+661    }
+662</code></pre></details>
+<details class="code" id="ev-spk-hdfs-state-load"><summary>spk-hdfs-state-load · HDFSBackedStateStoreProvider.scala:719</summary><p>Cache misses load a snapshot and deltas through the requested version, rather than taking the largest state file.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala#L719">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/HDFSBackedStateStoreProvider.scala</a></p><pre class="guide-pre"><code>719    private def loadMap(version: Long): HDFSBackedStateStoreMap = {
+720
+721      // Shortcut if the map for this version is already there to avoid a redundant put.
+722      val loadedCurrentVersionMap = synchronized { Option(loadedMaps.get(version)) }
+723      if (loadedCurrentVersionMap.isDefined) {
+724        loadedMapCacheHitCount.increment()
+725        return loadedCurrentVersionMap.get
+726      }
+727
+728      logWarning(log&quot;The state for version ${MDC(LogKeys.FILE_VERSION, version)} doesn't exist in &quot; +
+729        log&quot;loadedMaps. Reading snapshot file and delta files if needed...&quot; +
+730        log&quot;Note that this is normal for the first batch of starting query.&quot;)
+731
+732      loadedMapCacheMissCount.increment()
+733
+734      val (result, elapsedMs) = Utils.timeTakenMs {
+735        val (loadedVersion, loadedMap) = loadSnapshot(version)
+736        val finalMap = if (loadedVersion == version) {
+737          loadedMap
+738        } else {
+739          // Load all the deltas from the version after the loadedVersion up to the target version.
+740          // The loadedVersion is the one with a full snapshot, so it doesn't need deltas.
+741          val resultMap = createHDFSBackedStateStoreMap()
+742          resultMap.putAll(loadedMap)
+743          for (deltaVersion &lt;- loadedVersion + 1 to version) {
+744            updateFromDeltaFile(deltaVersion, resultMap)
+745          }
+746          resultMap</code></pre></details>
+<details class="code" id="ev-spk-rocksdb-commit"><summary>spk-rocksdb-commit · RocksDB.scala:1883</summary><p>RocksDB commit persists snapshots or durable changelog; periodic snapshot upload can occur separately.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/RocksDB.scala#L1883">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/RocksDB.scala</a></p><pre class="guide-pre"><code>1883    def commit(forceSnapshot: Boolean = false): (Long, StateStoreCheckpointInfo) = {
+1884      commitLatencyMs.clear()
+1885      updateMemoryUsageIfNeeded()
+1886      val newVersion = loadedVersion + 1
+1887      try {
+1888        logInfo(log&quot;Flushing updates for ${MDC(LogKeys.VERSION_NUM, newVersion)}&quot;)
+1889
+1890        if (forceSnapshot) {
+1891          shouldForceSnapshot.set(true)
+1892        }
+1893
+1894        var snapshot: Option[RocksDBSnapshot] = None
+1895        if (shouldCreateSnapshot() || shouldForceSnapshot.get()) {
+1896          val (newSnapshot, snapshotLatency) = createSnapshot(newVersion, sessionStateStoreCkptId)
+1897          snapshot = newSnapshot
+1898          commitLatencyMs ++= snapshotLatency
+1899        }
+1900
+1901        var isUploaded = false
+1902
+1903        logInfo(log&quot;Syncing checkpoint for ${MDC(LogKeys.VERSION_NUM, newVersion)} to DFS&quot;)
+1904        val fileSyncTimeMs = timeTakenMs {
+1905          if (enableChangelogCheckpointing) {
+1906            // If we have changed the columnFamilyId mapping, we have set a new
+1907            // snapshot and need to upload this to the DFS even if changelog checkpointing
+1908            // is enabled.
+1909            if (shouldForceSnapshot.get()) {
+1910              assert(snapshot.isDefined)</code></pre></details>
+<details class="code" id="ev-spk-state-ids"><summary>spk-state-ids · statefulOperators.scala:98</summary><p>Checkpoint format controls whether state checkpoint IDs supplement numeric versions.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/operators/stateful/statefulOperators.scala#L98">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/operators/stateful/statefulOperators.scala</a></p><pre class="guide-pre"><code>98    def enableStateStoreCheckpointIds(conf: SQLConf): Boolean = {
+99      conf.stateStoreCheckpointFormatVersion &gt;= 2
+100    }
+101  }
+102
+103  /**
+104   * An operator that reads or writes state from the [[StateStore]].
+105   * The [[StatefulOperatorStateInfo]] should be filled in by `prepareForExecution` in
+106   * [[IncrementalExecution]].
+107   */
+108  trait StatefulOperator extends SparkPlan {
+109    def stateInfo: Option[StatefulOperatorStateInfo]
+110
+111    def getStateInfo: StatefulOperatorStateInfo = {
+112      stateInfo.getOrElse {
+113        throw new IllegalStateException(&quot;State location not present for execution&quot;)
+114      }
+115    }
+116
+117    def metadataFilePath(): Path = {
+118      val stateCheckpointPath =
+119        new Path(getStateInfo.checkpointLocation, getStateInfo.operatorId.toString)
+120      new Path(new Path(stateCheckpointPath, &quot;_metadata&quot;), &quot;metadata&quot;)
+121    }
+122
+123    // Function used to record state schema for the first time and validate it against proposed
+124    // schema changes in the future. Runs as part of a planning rule on the driver.
+125    // Returns the schema file path for operators that write this to the metadata file,</code></pre></details>
+<details class="code" id="ev-spk-reader-loss"><summary>spk-reader-loss · KafkaDataConsumer.scala:442</summary><p>Out-of-range source reads fail or seek available data according to failOnDataLoss; missing Kafka records are not recovered.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L442">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala</a></p><pre class="guide-pre"><code>442          case e: OffsetOutOfRangeException =&gt;
+443            // When there is some error thrown, it's better to use a new consumer to drop all cached
+444            // states in the old consumer. We don't need to worry about the performance because this
+445            // is not a common path.
+446            releaseConsumer()
+447            fetchedData.reset()
+448
+449            if (failOnDataLoss) {
+450              throwOnDataLoss(toFetchOffset, untilOffset, topicPartition, groupId, e)
+451            } else {
+452              logOnDataLoss(topicPartition, groupId, s&quot;Cannot fetch offset $toFetchOffset&quot;, e)
+453            }
+454
+455            val oldToFetchOffsetd = toFetchOffset
+456            toFetchOffset = getEarliestAvailableOffsetBetween(consumer, toFetchOffset, untilOffset)
+457            if (toFetchOffset == UNKNOWN_OFFSET) {
+458              offsetOutOfRange += (untilOffset - oldToFetchOffsetd)
+459            } else {
+460              offsetOutOfRange += (toFetchOffset - oldToFetchOffsetd)
+461            }
+462        }
+463      }
+464
+465      if (isFetchComplete) {
+466        totalRecordsRead += 1
+467        fetchedRecord.record
+468      } else {
+469        fetchedData.reset()</code></pre></details>
+<details class="code" id="ev-spk-test-state-replay"><summary>spk-test-state-replay · StateStoreSuite.scala:330</summary><p>Inspected test reloads an earlier state version after a later partition commit and simulated batch failure.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala#L330">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala</a></p><pre class="guide-pre"><code>330    test(&quot;failure after committing with MAX_BATCHES_TO_RETAIN_IN_MEMORY set to 1&quot;) {
+331      tryWithProviderResource(newStoreProvider(opId = Random.nextInt(), partition = 0,
+332        numOfVersToRetainInMemory = 1)) { provider =&gt;
+333
+334        var currentVersion = 0
+335
+336        // commit the ver 1 : cache will have one element
+337        currentVersion = incrementVersion(provider, currentVersion)
+338        assert(getLatestData(provider, useColumnFamilies = false) === Set((&quot;a&quot;, 0) -&gt; 1))
+339        var loadedMaps = provider.getLoadedMaps()
+340        checkLoadedVersions(loadedMaps, count = 1, earliestKey = 1, latestKey = 1)
+341        checkVersion(loadedMaps, 1, Map((&quot;a&quot;, 0) -&gt; 1))
+342
+343        // commit the ver 2 : cache has already one elements and adding ver 2 incurs exceeding cache,
+344        // and ver 2 will be added but ver 1 will be evicted
+345        // this fact ensures cache miss will occur when this partition succeeds commit
+346        // but there's a failure afterwards so have to reprocess previous batch
+347        currentVersion = incrementVersion(provider, currentVersion)
+348        assert(getLatestData(provider, useColumnFamilies = false) === Set((&quot;a&quot;, 0) -&gt; 2))
+349        loadedMaps = provider.getLoadedMaps()
+350        checkLoadedVersions(loadedMaps, count = 1, earliestKey = 2, latestKey = 2)
+351        checkVersion(loadedMaps, 2, Map((&quot;a&quot;, 0) -&gt; 2))
+352
+353        // suppose there has been failure after committing, and it decided to reprocess previous batch
+354        currentVersion = 1
+355
+356        // committing to existing version which is committed partially but abandoned globally
+357        val store = provider.getStore(currentVersion)</code></pre></details>
+<details class="code" id="ev-spk-test-state-restart"><summary>spk-test-state-restart · StateStoreSuite.scala:888</summary><p>Inspected test verifies new state providers for restarted queries.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala#L888">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/state/StateStoreSuite.scala</a></p><pre class="guide-pre"><code>888    test(&quot;SPARK-21145: Restarted queries create new provider instances&quot;) {
+889      try {
+890        val checkpointLocation = Utils.createTempDir().getAbsoluteFile
+891        val spark: SparkSession = SparkSession.builder().master(&quot;local[2]&quot;).getOrCreate()
+892        SparkSession.setActiveSession(spark)
+893        spark.conf.set(SQLConf.SHUFFLE_PARTITIONS.key, &quot;1&quot;)
+894        import spark.implicits._
+895        val inputData = MemoryStream[Int](spark)
+896
+897        def runQueryAndGetLoadedProviders(): Seq[StateStoreProvider] = {
+898          val aggregated = inputData.toDF().groupBy(&quot;value&quot;).agg(count(&quot;*&quot;))
+899          // stateful query
+900          val query = aggregated.writeStream
+901            .format(&quot;memory&quot;)
+902            .outputMode(&quot;complete&quot;)
+903            .queryName(&quot;query&quot;)
+904            .option(&quot;checkpointLocation&quot;, checkpointLocation.toString)
+905            .start()
+906          inputData.addData(1, 2, 3)
+907          query.processAllAvailable()
+908          require(query.lastProgress != null) // at least one batch processed after start
+909          val loadedProvidersMethod =
+910            PrivateMethod[mutable.HashMap[StateStoreProviderId, StateStoreProvider]](
+911              Symbol(&quot;loadedProviders&quot;))
+912          val loadedProvidersMap = StateStore invokePrivate loadedProvidersMethod()
+913          val loadedProviders = loadedProvidersMap.synchronized { loadedProvidersMap.values.toSeq }
+914          query.stop()
+915          loadedProviders</code></pre></details>
+<details class="code" id="ev-spk-test-atomic-file"><summary>spk-test-atomic-file · CheckpointFileManagerSuite.scala:58</summary><p>Inspected test checks cancel versus close behavior and complete checkpoint-file publication.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/CheckpointFileManagerSuite.scala#L58">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/CheckpointFileManagerSuite.scala</a></p><pre class="guide-pre"><code>58    test(&quot;mkdirs, list, createAtomic, open, delete, exists&quot;) {
+59      withTempHadoopPath { case basePath =&gt;
+60        val fm = createManager(basePath)
+61        // Mkdirs
+62        val dir = new Path(s&quot;$basePath/dir/subdir/subsubdir&quot;)
+63        assert(!fm.exists(dir))
+64        fm.mkdirs(dir)
+65        assert(fm.exists(dir))
+66        fm.mkdirs(dir)
+67
+68        // List
+69        val acceptAllFilter = new PathFilter {
+70          override def accept(path: Path): Boolean = true
+71        }
+72        val rejectAllFilter = new PathFilter {
+73          override def accept(path: Path): Boolean = false
+74        }
+75        assert(fm.list(basePath, acceptAllFilter).exists(_.getPath.getName == &quot;dir&quot;))
+76        assert(fm.list(basePath, rejectAllFilter).length === 0)
+77
+78        // Create atomic without overwrite
+79        var path = new Path(s&quot;$dir/file&quot;)
+80        assert(!fm.exists(path))
+81        fm.createAtomic(path, overwriteIfPossible = false).writeContent(1).cancel()
+82        assert(!fm.exists(path))
+83        fm.createAtomic(path, overwriteIfPossible = false).writeContent(2).close()
+84        assert(fm.exists(path))
+85        assert(fm.open(path).readContent() == 2)</code></pre></details>
+<details class="code" id="ev-spk-test-no-data-replay"><summary>spk-test-no-data-replay · MicroBatchExecutionSuite.scala:188</summary><p>Inspected test simulates an unfinished no-data batch and validates restart behavior.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L188">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala</a></p><pre class="guide-pre"><code>188    test(&quot;no-data-batch re-executed after restart should call V1 source.getBatch()&quot;) {
+189      val testSource = ReExecutedBatchTestSource(spark)
+190      val df = testSource.toDF()
+191        .withColumn(&quot;eventTime&quot;, timestamp_seconds($&quot;value&quot;))
+192        .withWatermark(&quot;eventTime&quot;, &quot;10 seconds&quot;)
+193        .groupBy(window($&quot;eventTime&quot;, &quot;5 seconds&quot;) as Symbol(&quot;window&quot;))
+194        .agg(count(&quot;*&quot;) as Symbol(&quot;count&quot;))
+195        .select($&quot;window&quot;.getField(&quot;start&quot;).cast(&quot;long&quot;).as[Long])
+196
+197      /** Reset this test source so that it appears to be a new source requiring initialization */
+198      def resetSource(): StreamAction = Execute(&quot;reset source&quot;) { _ =&gt;
+199        testSource.reset()  // Make it look like a new source that needs to be re-initialized
+200        require(testSource.currentOffset === 0)
+201        require(testSource.getBatchCallCount === 0)
+202      }
+203
+204      /** Add data to this test source by incrementing its available offset */
+205      def addData(numNewRows: Int): StreamAction = new AddData {
+206        override def addData(query: Option[StreamExecution]): (SparkDataStream, streaming.Offset) = {
+207          testSource.incrementAvailableOffset(numNewRows)
+208          (testSource, testSource.getOffset.get)
+209        }
+210      }
+211
+212      testStream(df)(
+213        addData(numNewRows = 10),   // generate values 1...10, sets watermark to 0
+214        CheckAnswer(),
+215        addData(numNewRows = 10),   // generate values 11...20, sets watermark to 10</code></pre></details>
+<details class="code" id="ev-spk-test-retention-policy"><summary>spk-test-retention-policy · KafkaDontFailOnDataLossSuite.scala:152</summary><p>Inspected retention test exercises best-effort reading; it does not prove that expired records were recovered.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaDontFailOnDataLossSuite.scala#L152">spark/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaDontFailOnDataLossSuite.scala</a></p><pre class="guide-pre"><code>152    test(&quot;failOnDataLoss=false should not return duplicated records: microbatch v2&quot;) {
+153      verifyMissingOffsetsDontCauseDuplicatedRecords(testStreamingQuery = true) { (df, table) =&gt;
+154        val query = df.writeStream.format(&quot;memory&quot;).queryName(table).start()
+155        try {
+156          query.processAllAvailable()
+157        } finally {
+158          query.stop()
+159        }
+160      }
+161    }
+162
+163    test(&quot;failOnDataLoss=false should not return duplicated records: continuous processing&quot;) {
+164      verifyMissingOffsetsDontCauseDuplicatedRecords(testStreamingQuery = true) { (df, table) =&gt;
+165        val query = df.writeStream
+166          .format(&quot;memory&quot;)
+167          .queryName(table)
+168          .trigger(Trigger.Continuous(100))
+169          .start()
+170        try {
+171          // `processAllAvailable` doesn't work for continuous processing, so just wait until the last
+172          // record appears in the table.
+173          eventually(timeout(streamingTimeout)) {
+174            assert(spark.table(table).as[String].collect().contains(&quot;49&quot;))
+175          }
+176        } finally {
+177          query.stop()
+178        }
+179      }</code></pre></details>
+<details class="code" id="ev-spk-test-available-retry"><summary>spk-test-available-retry · KafkaMicroBatchSourceSuite.scala:2216</summary><p>Inspected test exercises planning recovery after a batch failure and Kafka partition changes.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala#L2216">spark/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala</a></p><pre class="guide-pre"><code>2216    test(&quot;SPARK-53560: no crash looping during uncommitted batch retry in AvailableNow trigger&quot;) {
+2217      val topic = newTopic()
+2218      testUtils.createTopic(topic, partitions = 1)
+2219      testUtils.sendMessages(topic, (1 to 7).map(_.toString).toArray, Some(0))
+2220      def udfFailOn7(x: Int): Int = {
+2221        if (x == 7) throw new RuntimeException(&quot;error for 7&quot;)
+2222        x
+2223      }
+2224      val kafka =
+2225        spark.readStream.format(&quot;kafka&quot;)
+2226          .option(&quot;kafka.bootstrap.servers&quot;, testUtils.brokerAddress)
+2227          .option(&quot;subscribe&quot;, topic)
+2228          .option(&quot;startingOffsets&quot;, &quot;earliest&quot;)
+2229          .load()
+2230          .select(expr(&quot;CAST(CAST(value AS STRING) AS INT)&quot;).as(&quot;value&quot;))
+2231          .as[Int]
+2232          .map(udfFailOn7)
+2233
+2234      withTempDir { dir =&gt;
+2235        testStream(kafka)(
+2236          StartStream(Trigger.AvailableNow, checkpointLocation = dir.getAbsolutePath),
+2237          ExpectFailure[SparkException] { e =&gt;
+2238            assert(e.getMessage.contains(&quot;error for 7&quot;))
+2239          },
+2240          AssertOnQuery { q =&gt;
+2241            testUtils.addPartitions(topic, 2)
+2242            !q.isActive
+2243          },</code></pre></details>
+<details class="code" id="ev-spk-async-progress"><summary>spk-async-progress · AsyncProgressTrackingMicroBatchExecution.scala:231</summary><p>Async progress tracking overrides ordinary progress logging; its timing is outside the main synchronous sequence.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/AsyncProgressTrackingMicroBatchExecution.scala#L231">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/AsyncProgressTrackingMicroBatchExecution.scala</a></p><pre class="guide-pre"><code>231    override def markMicroBatchStart(execCtx: MicroBatchExecutionContext): Unit = {
+232      if (!trigger.isInstanceOf[RealTimeTrigger]) {
+233        asyncAddToOffsetLog(execCtx)
+234      }
+235
+236      commitAllSources()
+237    }
+238
+239    override def markMicroBatchEnd(execCtx: MicroBatchExecutionContext): Unit = {
+240      watermarkTracker.updateWatermark(execCtx.executionPlan.executedPlan)
+241
+242      if (trigger.isInstanceOf[RealTimeTrigger]) {
+243        populateBatchOffsetsForRTM(execCtx)
+244        execCtx.reportTimeTaken(&quot;walCommit&quot;) {
+245          asyncAddToOffsetLog(execCtx)
+246        }
+247      }
+248
+249      // check if current batch there is a async write for the offset log is issued for this batch
+250      // if so, we should do the same for commit log.  However, if this is the first batch executed
+251      // in this run we should always persist to the commit log.  There can be situations in which
+252      // the offset log has more entries than the commit log and on restart we need to make sure
+253      // we write the missing entries to the commit log.  For example if the offset log is 0, 2, 5
+254      // and the commit log is 0, 2.  On restart we will re-process the data from batch 3 -&gt; 5.
+255      // Batch 5 is already part of the offset log but we still need to write the entry to
+256      // the commit log
+257      execCtx.reportTimeTaken(&quot;commitOffsets&quot;) {
+258        logInfo(log&quot;Submitting async commit log write for batch ${MDC(BATCH_ID, execCtx.batchId)}.&quot;)</code></pre></details>
+<details class="code" id="ev-spk-async-guarantees"><summary>spk-async-guarantees · performance-tips.md:63</summary><p>The pinned documentation explains that asynchronous progress tracking can change replay ranges and does not support ordinary end-to-end exactly-once guarantees.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/docs/streaming/performance-tips.md#L63">spark/docs/streaming/performance-tips.md</a></p><pre class="guide-pre"><code>63  * Exactly once end-to-end processing will not be supported with this asynchronous progress tracking because offset ranges for batch can be changed in case of failure. Though many sinks, such as Kafka sink, do not support writing exactly once anyways.
+64
+65  ## Switching the setting off
+66  Turning the async progress tracking off may cause the following exception to be thrown
+67
+68  ```scala
+69  java.lang.IllegalStateException: batch x doesn't exist
+70  ```
+71
+72  Also the following error message may be printed in the driver logs:
+73
+74  ```
+75  The offset log for batch x doesn't exist, which is required to restart the query from the latest batch x from the offset log. Please ensure there are two subsequent offset logs available for the latest batch via manually deleting the offset file(s). Please also ensure the latest batch for commit log is equal or one batch earlier than the latest batch for offset log.
+76  ```
+77
+78  This is caused by the fact that when async progress tracking is enabled, the framework will not checkpoint progress for every batch as would be done if async progress tracking is not used. To solve this problem simply re-enable “asyncProgressTrackingEnabled” and set “asyncProgressTrackingCheckpointIntervalMs” to 0 and run the streaming query until at least two micro-batches have been processed. Async progress tracking can be now safely disabled and restarting query should proceed normally.
+79
+80  # Continuous Processing
+81  ## [Experimental]
+82
+83  **Continuous processing** is a new, experimental streaming execution mode introduced in Spark 2.3 that enables low (~1 ms) end-to-end latency with at-least-once fault-tolerance guarantees. Compare this with the default *micro-batch processing* engine which can achieve exactly-once guarantees but achieve latencies of ~100ms at best. For some types of queries (discussed below), you can choose which mode to execute them in without modifying the application logic (i.e. without changing the DataFrame/Dataset operations).
+84
+85  To run a supported query in continuous processing mode, all you need to do is specify a **continuous trigger** with the desired checkpoint interval as a parameter. For example,
+86
+87  &lt;div class=&quot;codetabs&quot;&gt;
+88
+89  &lt;div data-lang=&quot;python&quot;  markdown=&quot;1&quot;&gt;
+90  {% highlight python %}</code></pre></details>
+<details class="code" id="ev-spk-test-foreach-state"><summary>spk-test-foreach-state · ForeachBatchSinkSuite.scala:486</summary><p>Inspected test covers eligible state-store commit validation when a callback swallows errors and incompletely consumes stateful work.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSinkSuite.scala#L486">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/sources/ForeachBatchSinkSuite.scala</a></p><pre class="guide-pre"><code>486    test(&quot;StateStore commit validation with swallowed exceptions in foreachBatch&quot;) {
+487      withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -&gt; &quot;5&quot;) {
+488        withTempDir { tempDir =&gt;
+489          val checkpointPath = tempDir.getCanonicalPath
+490
+491          // Create streaming DataFrame
+492          val streamingDF = spark.readStream
+493            .format(&quot;rate&quot;)
+494            .option(&quot;rowsPerSecond&quot;, 10)
+495            .option(&quot;numPartitions&quot;, 4)
+496            .load()
+497            .withColumn(&quot;key&quot;, col(&quot;value&quot;) % 10)
+498
+499          // Stateful aggregation
+500          val aggregatedDF = streamingDF
+501            .groupBy(&quot;key&quot;)
+502            .agg(sum(&quot;value&quot;).as(&quot;sum&quot;))
+503
+504          // ForeachBatch that swallows exceptions and returns early
+505          def problematicBatchProcessor(batchDF: DataFrame, batchId: Long): Unit = {
+506            try {
+507              // Process only first few rows
+508              val firstRows = batchDF.limit(2).collect()
+509
+510              // Simulate some processing that might fail
+511              if (firstRows.length &gt; 1) {
+512                throw new RuntimeException(&quot;Processing failed!&quot;)
+513              }</code></pre></details><p>Published supporting references: <a href="https://spark.apache.org/docs/4.0.2/streaming/structured-streaming-kafka-integration.html">Spark Kafka integration</a>, <a href="https://spark.apache.org/docs/4.0.2/streaming/apis-on-dataframes-and-datasets.html">Structured Streaming APIs and guarantees</a>, and <a href="https://spark.apache.org/docs/4.0.1/streaming/performance-tips.html">performance guidance</a>. These releases differ from the development pin; pinned code is authoritative for method names and timing here.</p><p><a href="spark-guide-validation.json">Pinned evidence manifest and rendered artifact checks</a></p></section><footer><a href="index.html">Field guide home</a><a href="spark-distributed-execution.html">Spark: driver, executors and Kafka reads</a><a href="kafka-offset-commits-flink-spark.html">Kafka offset commits compared</a></footer></main></div></body></html>

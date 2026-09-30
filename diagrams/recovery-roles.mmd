@@ -1,0 +1,39 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph C["Controller quorum"]
+ C1["Active controller"]
+ CM[("Replicated metadata log")]
+ C1 --> CM
+end
+subgraph B["Broker processes — roles can coexist"]
+ P["User partition leader"]
+ G["Group coordinator shard"]
+ T["Transaction coordinator shard"]
+ S["Share coordinator shard"]
+end
+subgraph D["Replicated broker logs"]
+ PD[("orders / P0")]
+ GD[("__consumer_offsets")]
+ TD[("__transaction_state")]
+ SD[("__share_group_state")]
+end
+CM -. metadata .-> P
+CM -. metadata .-> G
+CM -. metadata .-> T
+CM -. metadata .-> S
+P --> PD
+G --> GD
+T --> TD
+S --> SD
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class C1 control
+class CM,PD,GD,TD,SD store
+class P worker
+class G,S group
+class T txn

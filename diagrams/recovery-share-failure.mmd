@@ -1,0 +1,31 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph FAILURE["Which component failed?"]
+ F{"Failure domain"}
+ C["Consumer process"]
+ P["Source partition leader"]
+ S["Share state coordinator"]
+end
+subgraph RECOVERY["Independent recovery paths"]
+ CR["Release or acquisition-lock expiry
+redelivery remains possible"]
+ PR["Elect source leader
+reload state via persister
+use newer leader epoch"]
+ SR["Elect state-topic leader
+replay share shard
+retry state RPCs"]
+end
+F --> C --> CR
+F --> P --> PR
+F --> S --> SR
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class F,C,P,S store
+class CR,PR worker
+class SR group

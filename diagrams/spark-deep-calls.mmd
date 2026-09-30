@@ -1,0 +1,34 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":52,"rankSpacing":70},"sequence":{"useMaxWidth":false,"actorMargin":70,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph DRIVER["Driver process"]
+ A["StreamExecution
+query thread"] --> B["MicroBatchExecution
+constructNextBatch / runBatch"]
+ B --> C["KafkaMicroBatchStream
+latestOffset / planInputPartitions"]
+ C --> O["KafkaOffsetReaderAdmin
+Admin listOffsets"]
+ B --> D["Physical plan and RDD stages"] --> S["DAGScheduler
+TaskSchedulerImpl"]
+end
+subgraph EXEC["Executor process"]
+ E["Executor.TaskRunner"] --> F["KafkaBatchPartitionReader"] --> G["KafkaDataConsumer"] --> H["InternalKafkaConsumer
+assign / seek / poll"]
+end
+subgraph KAFKA["Kafka brokers"]
+ K["Metadata and partition leaders"]
+end
+S -->|"LaunchTask RPC"| E
+O --> K
+H -->|"Kafka binary protocol"| K
+classDef driver fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef executor fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef kafka fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef decision fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C,O,D,S driver
+class E,F,G,H executor
+class K kafka

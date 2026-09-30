@@ -1,0 +1,42 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":52,"rankSpacing":70},"sequence":{"useMaxWidth":false,"actorMargin":70,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph MAP["Source and map tasks"]
+ A["E1 / P0 and P1"]
+ B["E2 / P2"]
+ C["E3 / P3"]
+end
+subgraph SHUFFLE["Exchange by customer key"]
+ X["Materialized shuffle blocks
+hash customer into state partition"]
+end
+subgraph REDUCE["Stateful tasks — example two partitions"]
+ S0["E2 / state partition 0
+Load state version 42"]
+ S1["E3 / state partition 1
+Load state version 42"]
+end
+subgraph FS["Shared durable checkpoint"]
+ V0[("Operator / partition 0
+Committed next state 43")]
+ V1[("Operator / partition 1
+Committed next state 43")]
+end
+A --> X
+B --> X
+C --> X
+X --> S0
+X --> S1
+S0 --> V0
+S1 --> V1
+classDef driver fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef executor fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef kafka fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef decision fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C executor
+class X store
+class S0,S1 state
+class V0,V1 store

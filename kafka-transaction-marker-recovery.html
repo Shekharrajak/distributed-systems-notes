@@ -1,0 +1,677 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Transaction markers, crash windows and recovery · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head><body data-page="kafka-transaction-marker-recovery.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Ownership · durable state · fencing · recovery</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Election, coordinator, marker…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a><a href="spark-distributed-execution.html" data-nav="spark-distributed-execution.html"><span>25</span>Spark: driver, executors and Kafka reads</a><a href="spark-checkpoint-failure-recovery.html" data-nav="spark-checkpoint-failure-recovery.html"><span>26</span>Spark: checkpoints, state and failure recovery</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 23 · source-backed Kafka deep dive</p><h1>Transaction markers, crash windows and recovery</h1><p class="intro">Treat a Kafka transaction as a durable decision followed by repeatable completion work—not a single packet that instantly makes every partition visible.</p><p class="guide-footer-note">Pinned source, not a live cluster inspection. Start with the summary; expand the code at the end.</p><nav class="toc" aria-label="On this page"><a href="#summary">1. The three moments people accidentally merge</a><a href="#end-to-end">2. Follow transaction T42 across brokers</a><a href="#wire">3. WriteTxnMarkers: wire request versus on-disk record</a><a href="#visibility">4. HW, LSO and why a committed record can still wait</a><a href="#offsets">5. What a marker does to consumer offsets</a><a href="#crash-windows">6. Every important transaction crash window</a><a href="#epochs">7. Epochs: separate fences for separate stale actors</a><a href="#diagnostics">8. Diagnose a stuck transaction without confusing layers</a><a href="#presentation">9. A mental model you can present in 90 seconds</a><a href="#evidence">Source evidence, scope and validation gaps</a></nav></div><section id="summary"><h2>1. The three moments people accidentally merge</h2>
+ <div class="table-scroll"><table><thead><tr><th>Moment</th><th>Durable evidence</th><th>What it does not prove</th></tr></thead><tbody><tr><td>Decision recorded</td><td>PREPARE_COMMIT or PREPARE_ABORT replicated in __transaction_state.</td><td>All participant markers have finished or all readers can return the data.</td></tr><tr><td>Participant completed</td><td>COMMIT/ABORT control batch replicated in that participant log.</td><td>Every other partition completed simultaneously, or earlier transactions cannot hold this partition’s LSO back.</td></tr><tr><td>Coordinator cleanup completed</td><td>COMPLETE_COMMIT / COMPLETE_ABORT persisted after fan-out finishes.</td><td>A consumer has processed the output or an external side effect happened exactly once.</td></tr></tbody></table></div>
+ <p>The name PREPARE_COMMIT is easy to misread. In this protocol it records the decision the coordinator must finish; a replacement does not freely reconsider it and abort. Kafka is not sending a database-style prepare vote to every participant before choosing an outcome. Transactional data is already in participant logs; commit/abort markers resolve its visibility.</p>
+ <figure class="diagram" id="recovery-txn-logs"><figcaption><h3>A transaction leaves evidence in different logs</h3><p>A Kafka consume-transform-produce transaction can include __consumer_offsets. Ordinary Flink KafkaSource offset commits are not automatically part of this transaction.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-txn-logs.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-txn-logs.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: A transaction leaves evidence in different logs"><img src="diagrams/recovery-txn-logs.svg" alt="A transaction leaves evidence in different logs. A Kafka consume-transform-produce transaction can include __consumer_offsets. Ordinary Flink KafkaSource offset commits are not automatically part of this transaction." loading="lazy"></div></figure><div class="refs">Source: <a class="cite" href="#ev-txn-end">txn-end</a> <a class="cite" href="#ev-txn-reload">txn-reload</a> <a class="cite" href="#ev-txn-markers">txn-markers</a> <a class="cite" href="#ev-marker-handler">marker-handler</a></div></section>
+<section id="end-to-end"><h2>2. Follow transaction T42 across brokers</h2>
+ <p>Illustrative placement: producer P writes output/P0 on B1 and output/P1 on B2. T42’s transactional ID maps to <code>__transaction_state/P4</code> led by B3. Replicas of each log live on other brokers. All three broker roles can coexist in one JVM, but the transaction still has distinct state owners and durability boundaries.</p>
+ <ol><li>The producer initializes its transactional identity and receives producer ID/epoch. <code>beginTransaction()</code> starts client-side transaction state; it is not a controller election or a per-record RPC.</li><li>Participants are enrolled/verified according to the negotiated transaction protocol. Older sequences explicitly AddPartitionsToTxn; newer versions integrate more registration/verification with Produce. Do not assume one enrollment RPC per record.</li><li>Produce appends transactional record batches to participant leaders. Batch producer identity, epoch and sequence support fencing and duplicate detection. Replication acknowledgement is separate from committed-read visibility.</li><li><code>commitTransaction()</code> flushes required sends and drives EndTxn(COMMIT). The transaction coordinator validates identity, epoch and state, then appends the prepare decision to its replicated internal log.</li><li>After that succeeds, the inspected TV1 and TV2 code can reply to EndTxn before dispatching all markers. The marker manager groups pending participants by current leader endpoint and sends WriteTxnMarkers.</li><li>Each participant appends its control batch and completes the required replication path. Retriable partition errors are requeued; responses can have mixed success across partitions.</li><li>Once the pending participant set is empty, the coordinator appends the COMPLETE state. Failover can regenerate marker work from the earlier durable PREPARE state.</li></ol>
+ <figure class="diagram" id="recovery-txn-markers"><figcaption><h3>EndTxn decision, marker fan-out, completion</h3><p>Two participant leaders shown. Each marker must be replicated under its partition policy. Final COMPLETE bookkeeping is not the moment at which every reader simultaneously sees the transaction.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-txn-markers.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-txn-markers.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: EndTxn decision, marker fan-out, completion"><img src="diagrams/recovery-txn-markers.svg" alt="EndTxn decision, marker fan-out, completion. Two participant leaders shown. Each marker must be replicated under its partition policy. Final COMPLETE bookkeeping is not the moment at which every reader simultaneously sees the transaction." loading="lazy"></div></figure><div class="refs">Source: <a class="cite" href="#ev-txn-end">txn-end</a> <a class="cite" href="#ev-txn-end-v2">txn-end-v2</a> <a class="cite" href="#ev-txn-append">txn-append</a> <a class="cite" href="#ev-txn-markers">txn-markers</a> <a class="cite" href="#ev-txn-retry">txn-retry</a> <a class="cite" href="#ev-marker-handler">marker-handler</a></div></section>
+<section id="wire"><h2>3. WriteTxnMarkers: wire request versus on-disk record</h2>
+ <div class="table-scroll"><table><thead><tr><th>Layer</th><th>Fields / semantics</th><th>Important distinction</th></tr></thead><tbody><tr><td>WriteTxnMarkers request</td><td>Markers[]: ProducerId, ProducerEpoch, TransactionResult, Topics[{Name, PartitionIndexes}], CoordinatorEpoch; v2+ adds TransactionVersion.</td><td>Broker-to-broker request from transaction coordinator to current participant leaders. Boolean result selects commit or abort.</td></tr><tr><td>WriteTxnMarkers response</td><td>Per-producer, per-topic-partition error results.</td><td>A successful partition is removed from pending work; another can still need retry.</td></tr><tr><td>Control batch in participant log</td><td>Producer identity/epoch in the batch; COMMIT or ABORT control record; EndTransactionMarker carries coordinator epoch.</td><td>No complete business payload or full cross-partition participant list is copied into every marker.</td></tr><tr><td>Transaction-state record</td><td>Transactional identity, producer metadata, transaction state, participant set and timing/version metadata.</td><td>Stored in __transaction_state, not the controller metadata log.</td></tr><tr><td>Local producer/transaction tracking</td><td>ProducerStateManager, ProducerAppendInfo, transaction index and snapshots/log replay.</td><td>Tracks sequence/epoch/open-transaction state; not business-key deduplication.</td></tr></tbody></table></div>
+ <p>At <code>KafkaApis.handleWriteTxnMarkersRequest</code>, authorization and partition checks precede dispatch. For ordinary participants it creates <code>MemoryRecords.withEndTransactionMarker</code> and appends through ReplicaManager with coordinator origin and required acknowledgements of -1. For <code>__consumer_offsets</code>, it delegates to <code>GroupCoordinatorService.completeTransaction</code> so the state-machine completion is ordered with offset work.</p>
+ <p><code>TransactionVersion</code> in the marker RPC is not stored as an equivalent field in the record batch. The inspected ProducerAppendInfo explicitly handles replication-origin validation differently because a follower sees the replicated records, not the original RPC metadata. TV2’s epoch rules also differ from legacy behavior; “the marker always has the exact producer epoch used for the data” is unsafe.</p>
+ <p>Full schemas: <a href="kafka-rpc-atlas.html#rpc-27">WriteTxnMarkers (27)</a>, <a href="kafka-rpc-atlas.html#rpc-26">EndTxn (26)</a>, <a href="kafka-rpc-atlas.html#rpc-28">TxnOffsetCommit (28)</a>.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-marker-handler">marker-handler</a> <a class="cite" href="#ev-marker-append">marker-append</a> <a class="cite" href="#ev-runtime-marker">runtime-marker</a> <a class="cite" href="#ev-txn-append">txn-append</a> <a class="cite" href="#ev-marker-schema">marker-schema</a></div></section>
+<section id="visibility"><h2>4. HW, LSO and why a committed record can still wait</h2>
+ <pre class="guide-pre"><code>LEO = next append offset (local log end)
+HW  = exclusive replicated/committed-read boundary for the partition
+LSO = min(HW, earliest unstable transaction first offset)
+
+Unstable means either:
+  transaction outcome still undecided in the participant log, OR
+  its outcome marker has not yet passed the replication boundary.
+
+read_committed returns eligible records below LSO and filters aborted data.
+Control batches consume offsets but are not normal application records.</code></pre>
+ <div class="table-scroll"><table><thead><tr><th>Offset in one partition</th><th>Record</th><th>Visibility while T1 is open</th></tr></thead><tbody><tr><td>100</td><td>T1 transactional data</td><td>Held by T1.</td></tr><tr><td>101</td><td>Nontransactional data</td><td>Also held behind this partition’s LSO=100 despite having no transaction of its own.</td></tr><tr><td>102</td><td>T2 transactional data</td><td>Held even if T2 gets its own commit marker first.</td></tr><tr><td>103</td><td>T2 COMMIT marker, replicated</td><td>Does not resolve earlier T1.</td></tr><tr><td>104</td><td>T1 COMMIT marker</td><td>When this marker is below HW and no earlier unstable transaction remains, LSO can advance.</td></tr><tr><td>Alternative: 104 = T1 ABORT</td><td>T1 records filtered; 101 and committed T2 can become eligible.</td><td>Abort resolves the visibility blockage; it does not erase the physical log bytes immediately.</td></tr></tbody></table></div>
+ <p>This is a teaching example, not a captured log. If HW is 104, a marker at offset 104 has not passed the exclusive committed boundary; HW must advance beyond it. ProducerStateManager tracks both ongoing and completed-but-unreplicated transactions. A marker only appended to one leader’s memory/log is insufficient for stable visibility.</p>
+ <p>Kafka transactions do not provide a globally synchronized snapshot across all partitions to an arbitrary consumer. P0’s marker can become stable before P1’s. Atomic outcome means the transaction’s writes resolve consistently to commit or abort under the protocol; it does not mean a single poll returns all transaction records at once or no partial observation can occur while reading partitions independently.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-unstable">unstable</a> <a class="cite" href="#ev-lso">lso</a> <a class="cite" href="#ev-marker-append">marker-append</a> <a class="cite" href="#ev-test-stable">test-stable</a></div></section>
+<section id="offsets"><h2>5. What a marker does to consumer offsets</h2>
+ <p>For Kafka-native consume-transform-produce, the producer can enroll group offsets in its transaction. TxnOffsetCommit writes pending transactional offset records in <code>__consumer_offsets</code>. On COMMIT marker replay, OffsetMetadataManager materializes those pending offsets; on ABORT it discards them. Stable offset reads must not present unresolved transactional progress as safely committed.</p>
+ <p>Note the two acknowledgements: “TxnOffsetCommit accepted/replicated” means staged work exists; it does not mean the producer transaction committed. The marker is the outcome signal. Replaying a marker with no pending offsets is a no-op in this state manager. Mixed ordinary and transactional commits use log-record ordering when deciding which offset value wins—not simply the numerically largest consumer offset.</p>
+ <details class="qa"><summary>Is this what the standard Flink connector does?</summary><p>No. A completed Flink checkpoint durably links source split positions, operator state and sink committables. KafkaSink commits its output transaction afterward; optional KafkaSource OffsetCommit is independent. The transaction diagram includes __consumer_offsets only for a producer transaction that explicitly enrolled it. The <a href="kafka-flink-distributed-runtime.html#checkpoint">existing Flink checkpoint chapter</a> shows the separate completion branches.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-offset-marker">offset-marker</a> <a class="cite" href="#ev-runtime-marker">runtime-marker</a> <a class="cite" href="#ev-marker-handler">marker-handler</a> <a class="cite" href="#ev-test-marker-timeout">test-marker-timeout</a></div></section>
+<section id="crash-windows"><h2>6. Every important transaction crash window</h2>
+ <figure class="diagram" id="recovery-txn-crash"><figcaption><h3>Crash recovery follows the durable state</h3><p>This is a decision tree over recovered log state, not every legal TransactionMetadata transition. A prepared decision is irrevocable; completion work is repeatable.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-txn-crash.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-txn-crash.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Crash recovery follows the durable state"><img src="diagrams/recovery-txn-crash.svg" alt="Crash recovery follows the durable state. This is a decision tree over recovered log state, not every legal TransactionMetadata transition. A prepared decision is irrevocable; completion work is repeatable." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Crash / loss window</th><th>Durable truth on recovery</th><th>Required behavior / risk</th></tr></thead><tbody><tr><td>Before any transactional send</td><td>No participant data from this attempt.</td><td>Recover identity/protocol state; application may start/retry according to client API.</td></tr><tr><td>Produce appended, response lost</td><td>Record may already be in the log.</td><td>Idempotent retry uses producer identity/epoch/sequence. A fresh business resend is not automatically deduplicated.</td></tr><tr><td>Data written; no prepare decision committed</td><td>Recovered transaction can still be ONGOING.</td><td>A valid producer may continue/finish; timeout or fencing can drive abort. read_committed hides unresolved data.</td></tr><tr><td>EndTxn request lost before processing</td><td>No new durable decision from that request.</td><td>Client retries using transaction state; do not infer abort from socket failure.</td></tr><tr><td>Prepare append times out / ACK lost</td><td>Decision may or may not be durable.</td><td>Resolve by coordinator replay and supported retries. A timeout is not a safe instruction to start a contradictory outcome.</td></tr><tr><td>PREPARE_COMMIT durable; producer misses response</td><td>Commit decision survives independently of producer.</td><td>Coordinator or successor continues COMMIT markers. Client cannot choose ABORT to undo it.</td></tr><tr><td>Coordinator crashes before sending first marker</td><td>PREPARE state + participant set survive in __transaction_state.</td><td>New owner loads and regenerates fan-out. No producer process is needed to finish the recorded decision.</td></tr><tr><td>Some participants finish, others do not</td><td>Some logs have markers; coordinator still has PREPARE state.</td><td>Resume/retry remaining work; replay can re-send to already completed participants. Never convert a partial commit fan-out into abort.</td></tr><tr><td>Participant leader dies before marker replication</td><td>Marker may be absent from surviving committed history.</td><td>Route to new eligible leader and retry; durable decision remains the authority.</td></tr><tr><td>Participant marker replicated; response lost</td><td>Participant outcome survives but coordinator may still think it pending.</td><td>Repeat completion safely using epoch/producer/transaction state; duplicate control records are not duplicate business outputs.</td></tr><tr><td>All markers finish; COMPLETE append fails</td><td>Participant outcomes already exist; coordinator may reload PREPARE.</td><td>Retry bookkeeping or regenerate completion after failover. This does not uncommit participant data.</td></tr><tr><td>Old coordinator has queued/in-flight markers after relocation</td><td>New coordinator has a newer coordinator epoch.</td><td>Old local work cancels on ownership checks; participant rejects older observed epochs. Fencing is scoped/validated, not magic message recall.</td></tr><tr><td>Producer times out while transaction is ONGOING</td><td>Coordinator scans eligible timed-out ongoing transactions.</td><td>Drive ABORT under the timeout protocol. A durably prepared COMMIT is not replaced just because marker delivery is slow.</td></tr><tr><td>New producer takes over same transactional ID</td><td>Producer fencing/epoch protocol invalidates stale producer work.</td><td>An old task cannot safely continue sending; do not solve fencing by randomly changing IDs and replaying visible output.</td></tr><tr><td>Internal transaction topic cannot meet replication policy</td><td>Decision/completion persistence stalls or errors.</td><td>Healthy output topic alone is insufficient. Repair internal-topic replication/availability.</td></tr><tr><td>Permanent participant loss / incompatible fatal marker error</td><td>Some completion work cannot finish safely.</td><td>Protocol retries are not an infinite repair guarantee; investigate storage, configuration and operator recovery options.</td></tr><tr><td>Committed data later deleted or all replicas lost</td><td>The prior success cannot recreate removed bytes.</td><td>Retention, backups and durability policy remain outside transaction atomicity.</td></tr></tbody></table></div>
+ <p>This catalog covers protocol phases and major failure domains, not every possible combination of simultaneous faults. Recovery assumes retained state, valid replicas, supported versions and eventual availability. A permanent outage can preserve safety while preventing completion indefinitely.</p>
+ <div class="table-scroll"><table><thead><tr><th>Marker response / condition</th><th>Inspected completion-handler action</th></tr></thead><tbody><tr><td>NONE</td><td>Remove that participant from the pending set; attempt final transaction-state completion when none remain.</td></tr><tr><td>Disconnect; UNKNOWN_TOPIC_OR_PARTITION; NOT_LEADER_OR_FOLLOWER; NOT_ENOUGH_REPLICAS; NOT_ENOUGH_REPLICAS_AFTER_APPEND; REQUEST_TIMED_OUT; KAFKA_STORAGE_ERROR</td><td>Requeue applicable partitions using current leader metadata, provided this coordinator still owns the transaction.</td></tr><tr><td>Ownership lost / coordinator epoch changed / loading invalidates old work</td><td>Cancel this stale sender’s pending work. The new owner reconstructs authoritative work from its shard.</td></tr><tr><td>INVALID_PRODUCER_EPOCH / TRANSACTION_COORDINATOR_FENCED</td><td>Stop that obsolete marker work. This is not permission to switch a durable COMMIT decision to ABORT.</td></tr><tr><td>CORRUPT_MESSAGE / MESSAGE_TOO_LARGE / RECORD_LIST_TOO_LARGE / INVALID_REQUIRED_ACKS</td><td>Treated as unexpected fatal handler errors, not ordinary infinite retries.</td></tr><tr><td>UNSUPPORTED_FOR_MESSAGE_FORMAT / UNSUPPORTED_VERSION</td><td>The inspected handler removes that participant under its assumption that the producer could not write supported transactional data there; this is a code-specific compatibility path, not a generic recovery recipe.</td></tr></tbody></table></div>
+ <p>The broker maps loading/not-coordinator failures from the group-coordinator completion path to NOT_LEADER_OR_FOLLOWER for the marker sender. This translation is why wire errors do not always use the same names as the internal failing component.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-txn-reload">txn-reload</a> <a class="cite" href="#ev-txn-retry">txn-retry</a> <a class="cite" href="#ev-txn-markers">txn-markers</a> <a class="cite" href="#ev-txn-append">txn-append</a> <a class="cite" href="#ev-txn-timeout">txn-timeout</a> <a class="cite" href="#ev-test-txn-reload">test-txn-reload</a> <a class="cite" href="#ev-test-marker-retry">test-marker-retry</a> <a class="cite" href="#ev-test-marker-stale">test-marker-stale</a></div></section>
+<section id="epochs"><h2>7. Epochs: separate fences for separate stale actors</h2>
+ <div class="table-scroll"><table><thead><tr><th>Epoch / identity</th><th>Fences or distinguishes</th><th>Do not confuse with</th></tr></thead><tbody><tr><td>KRaft leader epoch</td><td>Controller-quorum leadership terms; log/vote validity.</td><td>User-topic partition leader epoch.</td></tr><tr><td>Broker registration epoch</td><td>Broker incarnation after registration/restart.</td><td>A TCP connection ID or consumer member ID.</td></tr><tr><td>Partition leader epoch</td><td>Leadership generation of a particular partition.</td><td>A cluster-wide sequence number.</td></tr><tr><td>Transaction coordinator epoch</td><td>Ownership generation tied to the transaction-state partition; checked on marker work.</td><td>Producer epoch.</td></tr><tr><td>Producer ID + producer epoch + sequence</td><td>Producer incarnation and per-partition duplicate/order tracking; marker validation is version-sensitive.</td><td>Business-event identity or arbitrary payload deduplication.</td></tr><tr><td>Group generation / member epoch</td><td>Classic/new membership validity and assignment reconciliation.</td><td>Kafka topic offsets.</td></tr><tr><td>Share source leader epoch + state epoch</td><td>Stale source leaders and stale delivery-state incarnations.</td><td>An acknowledgement count or share-session epoch.</td></tr></tbody></table></div>
+ <p>The participant’s coordinator-epoch check compares against the highest epoch stored in its producer state. It cannot reject an epoch it has never learned merely because another machine has advanced. Safety combines durable decision consistency, ownership checks, record/producer epoch rules and eventual fencing; no single integer magically makes the network synchronous.</p>
+ <p>TV2 deliberately has additional producer-epoch behavior. The code passes transaction version into the marker append path; follower replication only sees the batch. Explain the invariant—stale work must not corrupt a newer transaction—before presenting version-specific epoch arithmetic.</p><div class="refs">Source: <a class="cite" href="#ev-marker-fence">marker-fence</a> <a class="cite" href="#ev-marker-append">marker-append</a> <a class="cite" href="#ev-txn-end-v2">txn-end-v2</a> <a class="cite" href="#ev-txn-retry">txn-retry</a> <a class="cite" href="#ev-share-epochs">share-epochs</a> <a class="cite" href="#ev-raft-vote">raft-vote</a></div></section>
+<section id="diagnostics"><h2>8. Diagnose a stuck transaction without confusing layers</h2>
+ <div class="table-scroll"><table><thead><tr><th>Symptom</th><th>First questions</th><th>Likely layer</th></tr></thead><tbody><tr><td>Producer commit returned, consumer sees nothing</td><td>Did participant markers replicate? Is an older transaction holding LSO? Is consumer read_committed?</td><td>Marker/LSO path, not necessarily producer failure.</td></tr><tr><td>Marker retry loops</td><td>Which partition errors: stale leader, insufficient replicas, timeout, storage error? Has routing changed?</td><td>Participant availability and marker sender.</td></tr><tr><td>Many transactional IDs fail together</td><td>Do they map to one unavailable/loading __transaction_state shard?</td><td>Transaction coordinator shard rather than every output topic.</td></tr><tr><td>Offset commits/heartbeats fail but Produce works</td><td>Is __consumer_offsets owner ready and reachable? Which group protocol?</td><td>Group coordinator/internal-topic path.</td></tr><tr><td>ShareFetch works but ACCEPT fails</td><td>Can source leader reach/persist to the correct share-state owner? Are epochs stale?</td><td>Share coordinator/persister rather than source payload log.</td></tr><tr><td>Many unrelated leaders stop changing</td><td>Is metadata quorum healthy and are brokers applying metadata?</td><td>Control plane.</td></tr><tr><td>Flink commit fails after a long outage</td><td>Was checkpoint completed? Does its transaction still exist/allow recovery? Did timeout/fencing abort pending work?</td><td>Cross-system recovery contract; Kafka cannot resurrect an aborted checkpoint transaction.</td></tr></tbody></table></div>
+ <p>Correlate transaction ID, producer ID/epoch, coordinator shard/epoch, participant partition/leader epoch, HW and LSO. Inspect controller quorum health, metadata application lag, internal-topic replication, coordinator load time and pending marker work before changing timeouts. Do not log credentials or record payloads merely to identify the protocol state.</p>
+ <pre class="guide-pre"><code>Visibility latency ≈ producer batching + output replication
+                   + wait until commit is requested
+                   + decision replication + marker replication
+                   + any earlier unresolved transaction on that partition
+
+For Flink, add the checkpoint completion wait before sink commit.
+These are dependency terms, not an additive benchmark prediction.</code></pre>
+ <p>Higher batching improves throughput but can add waiting. More participants increase fan-out and the chance one slow partition delays full completion. Shorter transaction timeouts bound abandoned work sooner but tolerate less checkpoint/recovery delay. More replication improves failure tolerance only with sound placement and usable surviving copies.</p></section>
+<section id="presentation"><h2>9. A mental model you can present in 90 seconds</h2>
+ <figure class="diagram" id="recovery-mental"><figcaption><h3>The presentation mental model: map, journal, receipt</h3><p>Use the same four questions for every failure: who owned it, which durable journal survives, what fences the old owner, and what proves completion?</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-mental.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-mental.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The presentation mental model: map, journal, receipt"><img src="diagrams/recovery-mental.svg" alt="The presentation mental model: map, journal, receipt. Use the same four questions for every failure: who owned it, which durable journal survives, what fences the old owner, and what proves completion?" loading="lazy"></div></figure>
+ <blockquote><p>Kafka has a map and several journals. KRaft replicates the map: which broker owns each partition. User records, group state, transaction decisions and share delivery state live in their own replicated journals. When a broker dies, the controller changes ownership; the replacement replays the appropriate journal. Epochs stop stale actors from corrupting newer work.</p><p>A transaction adds a durable decision and receipts. EndTxn records the decision; WriteTxnMarkers delivers it to participant logs. A committed decision must be finished after failover. Read-committed visibility follows replicated markers and the last stable offset—not the arrival of one EndTxn response.</p><p>For any failure ask four questions: who owned it, what journal survives, what fences the old owner, and which receipt proves completion?</p></blockquote>
+ <details class="qa"><summary>Quick audience checks</summary><ul><li>Controller elected: are all coordinators loaded? <strong>No.</strong></li><li>Group coordinator failed: did all source partition leaders change? <strong>No.</strong></li><li>EndTxn succeeded: can every output partition be read immediately? <strong>No.</strong></li><li>Share consumer side effect succeeded: is ACCEPT atomic with it? <strong>No, not in the ordinary path.</strong></li><li>Flink source offset committed to Kafka: is that its checkpoint recovery authority? <strong>No.</strong></li><li>Every replica copy lost: can an epoch or checkpoint offset reconstruct the missing Kafka payload? <strong>No.</strong></li></ul></details>
+ <p><a href="kafka-leadership-metadata.html">Restart from the cluster picture</a> · <a href="kafka-group-share-coordinators.html">Review group/share ownership</a> · <a href="kafka-rpc-atlas.html">Inspect exact RPC schemas</a></p></section>
+<section id="evidence"><h2>Source evidence, scope and validation gaps</h2><p>Source baseline: <a href="https://github.com/apache/kafka/tree/d2da6a18f839ce8b2eeb4db8e7515200258b0f81">Kafka d2da6a18f839ce8b2eeb4db8e7515200258b0f81</a>. Facts below were traced from this source snapshot. Test bodies were inspected as evidence; <strong>Kafka engine tests and live fault injection were not run</strong>. The validation report concerns the generated documentation, diagrams and links. Example placements and offsets are illustrative, not an observed deployment.</p><p>This is a modern KRaft/source-snapshot guide, not a guarantee for every Kafka release or feature level. It covers ordinary producer transactions and share acknowledgements, not the separate transactional-share development branch or every distributed-transaction API extension. Apache source excerpts are under the <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p><details class="code" id="ev-raft-vote"><summary>raft-vote · KafkaRaftClient.java:832</summary><p>Vote validates epochs, candidate log position and voter identity; pre-vote is a distinct mode.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L832">raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java</a></p><pre class="guide-pre"><code>832      private VoteResponseData handleVoteRequest(
+833          RaftRequest.Inbound requestMetadata
+834      ) {
+835          VoteRequestData request = (VoteRequestData) requestMetadata.data();
+836
+837          if (!hasValidClusterId(request.clusterId())) {
+838              return new VoteResponseData().setErrorCode(Errors.INCONSISTENT_CLUSTER_ID.code());
+839          }
+840
+841          if (!hasValidTopicPartition(request, log.topicPartition())) {
+842              // Until we support multi-raft, we treat individual topic partition mismatches as invalid requests
+843              return new VoteResponseData().setErrorCode(Errors.INVALID_REQUEST.code());
+844          }
+845
+846          VoteRequestData.PartitionData partitionRequest =
+847              request.topics().get(0).partitions().get(0);
+848
+849          int replicaId = partitionRequest.replicaId();
+850          int replicaEpoch = partitionRequest.replicaEpoch();
+851          boolean preVote = partitionRequest.preVote();
+852
+853          int lastEpoch = partitionRequest.lastOffsetEpoch();
+854          long lastEpochEndOffset = partitionRequest.lastOffset();
+855          /* Validate the replica epoch and the log's last epoch.
+856           *
+857           * For a standard vote, the candidate replica increases the epoch before sending a vote request.
+858           * So we expect the replicaEpoch to be strictly greater than the log's last epoch. This is always true because
+859           * the candidate has never seen a leader at replicaEpoch.</code></pre></details>
+<details class="code" id="ev-runtime-marker"><summary>runtime-marker · CoordinatorRuntime.java:2249</summary><p>Transaction marker completion is serialized through the coordinator runtime.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L2249">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java</a></p><pre class="guide-pre"><code>2249      public CompletableFuture&lt;Void&gt; scheduleTransactionCompletion(
+2250          String name,
+2251          TopicPartition tp,
+2252          long producerId,
+2253          short producerEpoch,
+2254          int coordinatorEpoch,
+2255          TransactionResult result,
+2256          short transactionVersion
+2257      ) {
+2258          try {
+2259              throwIfNotRunning();
+2260              log.debug(&quot;Scheduled execution of transaction completion for {} with producer id={}, producer epoch={}, &quot; +
+2261                  &quot;coordinator epoch={}, transaction version={} and transaction result={}.&quot;, tp, producerId, producerEpoch, coordinatorEpoch, transactionVersion, result);
+2262              CoordinatorCompleteTransactionEvent event = new CoordinatorCompleteTransactionEvent(
+2263                  name,
+2264                  tp,
+2265                  producerId,
+2266                  producerEpoch,
+2267                  coordinatorEpoch,
+2268                  result,
+2269                  transactionVersion,
+2270                  writeTimeout
+2271              );
+2272              enqueueLast(event);
+2273              return event.future;
+2274          } catch (Throwable t) {
+2275              return CompletableFuture.failedFuture(t);
+2276          }</code></pre></details>
+<details class="code" id="ev-offset-marker"><summary>offset-marker · OffsetMetadataManager.java:1251</summary><p>Commit materializes pending transactional offsets; abort discards them; no pending offsets makes replay a no-op.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L1251">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java</a></p><pre class="guide-pre"><code>1251      public void replayEndTransactionMarker(
+1252          long producerId,
+1253          TransactionResult result
+1254      ) throws RuntimeException {
+1255          Offsets pendingOffsets = pendingTransactionalOffsets.remove(producerId);
+1256
+1257          if (pendingOffsets == null) {
+1258              log.debug(&quot;Replayed end transaction marker with result {} for producer id {} but &quot; +
+1259                  &quot;no pending offsets are present. Ignoring it.&quot;, result, producerId);
+1260              return;
+1261          }
+1262
+1263          pendingOffsets.offsetsByGroup.forEach((groupId, topicOffsets) -&gt; {
+1264              topicOffsets.forEach((topic, partitionOffsets) -&gt; {
+1265                  partitionOffsets.keySet().forEach(partitionId -&gt; {
+1266                      openTransactions.remove(groupId, topic, partitionId, producerId);
+1267                  });
+1268              });
+1269          });
+1270
+1271          if (result == TransactionResult.COMMIT) {
+1272              log.debug(&quot;Committed transactional offset commits for producer id {}.&quot;, producerId);
+1273
+1274              pendingOffsets.offsetsByGroup.forEach((groupId, topicOffsets) -&gt; {
+1275                  topicOffsets.forEach((topicName, partitionOffsets) -&gt; {
+1276                      partitionOffsets.forEach((partitionId, offsetAndMetadata) -&gt; {
+1277                          OffsetAndMetadata existingOffsetAndMetadata = offsets.get(
+1278                              groupId,</code></pre></details>
+<details class="code" id="ev-share-epochs"><summary>share-epochs · ShareCoordinatorShard.java:774</summary><p>Writes reject stale source-leader epochs and stale state epochs.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L774">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java</a></p><pre class="guide-pre"><code>774          if (leaderEpochMap.containsKey(mapKey) &amp;&amp; leaderEpochMap.get(mapKey) &gt; partitionData.leaderEpoch()) {
+775              log.error(&quot;Write request leader epoch is smaller than last recorded current: {}, requested: {}.&quot;, leaderEpochMap.get(mapKey), partitionData.leaderEpoch());
+776              return Optional.of(getWriteErrorCoordinatorResult(Errors.FENCED_LEADER_EPOCH, null, topicId, partitionId));
+777          }
+778          if (stateEpochMap.containsKey(mapKey) &amp;&amp; stateEpochMap.get(mapKey) &gt; partitionData.stateEpoch()) {
+779              log.info(&quot;Write request state epoch is smaller than last recorded current: {}, requested: {}.&quot;, stateEpochMap.get(mapKey), partitionData.stateEpoch());
+780              return Optional.of(getWriteErrorCoordinatorResult(Errors.FENCED_STATE_EPOCH, null, topicId, partitionId));
+781          }
+782          if (metadataImage == null) {
+783              log.error(&quot;Metadata image is null&quot;);
+784              return Optional.of(getWriteErrorCoordinatorResult(Errors.UNKNOWN_TOPIC_OR_PARTITION, null, topicId, partitionId));
+785          }
+786          Optional&lt;CoordinatorMetadataImage.TopicMetadata&gt; topicMetadataOp = metadataImage.topicMetadata(topicId);
+787          if (topicMetadataOp.isEmpty() ||
+788              topicMetadataOp.get().partitionCount() &lt;= partitionId) {
+789              log.error(&quot;Topic or partition not found in metadata image when writing: {}:{}-{}.&quot;, topicId,
+790                  topicMetadataOp.map(CoordinatorMetadataImage.TopicMetadata::name).orElse(&quot;null&quot;), partitionId);
+791              return Optional.of(getWriteErrorCoordinatorResult(Errors.UNKNOWN_TOPIC_OR_PARTITION, null, topicId, partitionId));
+792          }
+793
+794          return Optional.empty();
+795      }
+796
+797      private Optional&lt;ReadShareGroupStateResponseData&gt; maybeGetReadStateError(ReadShareGroupStateRequestData request) {
+798          String groupId = request.groupId();
+799          ReadShareGroupStateRequestData.ReadStateData topicData = request.topics().get(0);
+800          ReadShareGroupStateRequestData.PartitionData partitionData = topicData.partitions().get(0);
+801          int leaderEpoch = partitionData.leaderEpoch();</code></pre></details>
+<details class="code" id="ev-txn-end"><summary>txn-end · TransactionCoordinator.scala:544</summary><p>EndTxn validates identity/state then persists a prepare decision before replying and dispatching markers.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala#L544">core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala</a></p><pre class="guide-pre"><code>544    private def endTransactionWithTV1(transactionalId: String,
+545                               producerId: Long,
+546                               producerEpoch: Short,
+547                               txnMarkerResult: TransactionResult,
+548                               isFromClient: Boolean,
+549                               responseCallback: EndTxnCallback,
+550                               requestLocal: RequestLocal): Unit = {
+551      var isEpochFence = false
+552      if (transactionalId == null || transactionalId.isEmpty)
+553        responseCallback(Errors.INVALID_REQUEST, RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH)
+554      else {
+555        val preAppendResult: ApiResult[(Int, TxnTransitMetadata)] = txnManager.getTransactionState(transactionalId).flatMap {
+556          case None =&gt;
+557            Left(Errors.INVALID_PRODUCER_ID_MAPPING)
+558
+559          case Some(epochAndTxnMetadata) =&gt;
+560            val txnMetadata = epochAndTxnMetadata.transactionMetadata
+561            val coordinatorEpoch = epochAndTxnMetadata.coordinatorEpoch
+562
+563            txnMetadata.inLock(() =&gt; {
+564              if (txnMetadata.producerId != producerId)
+565                Left(Errors.INVALID_PRODUCER_ID_MAPPING)
+566              // Strict equality is enforced on the client side requests, as they shouldn't bump the producer epoch.
+567              else if ((isFromClient &amp;&amp; producerEpoch != txnMetadata.producerEpoch) || producerEpoch &lt; txnMetadata.producerEpoch)
+568                Left(Errors.PRODUCER_FENCED)
+569              else if (txnMetadata.pendingTransitionInProgress &amp;&amp; txnMetadata.pendingState.get != TransactionState.PREPARE_EPOCH_FENCE)
+570                Left(Errors.CONCURRENT_TRANSACTIONS)
+571              else txnMetadata.state match {</code></pre></details>
+<details class="code" id="ev-txn-end-v2"><summary>txn-end-v2 · TransactionCoordinator.scala:759</summary><p>The common EndTxn path delegates legacy handling and applies TV2 epoch/retry rules.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala#L759">core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala</a></p><pre class="guide-pre"><code>759    private def endTransaction(transactionalId: String,
+760                               producerId: Long,
+761                               producerEpoch: Short,
+762                               txnMarkerResult: TransactionResult,
+763                               isFromClient: Boolean,
+764                               clientTransactionVersion: TransactionVersion,
+765                               responseCallback: EndTxnCallback,
+766                               requestLocal: RequestLocal): Unit = {
+767      if (!clientTransactionVersion.supportsEpochBump()) {
+768        endTransactionWithTV1(transactionalId, producerId, producerEpoch, txnMarkerResult, isFromClient, responseCallback, requestLocal)
+769        return
+770      }
+771      var isEpochFence = false
+772      if (transactionalId == null || transactionalId.isEmpty)
+773        responseCallback(Errors.INVALID_REQUEST, RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH)
+774      else {
+775        var producerIdCopy = RecordBatch.NO_PRODUCER_ID
+776        var producerEpochCopy = RecordBatch.NO_PRODUCER_EPOCH
+777        val preAppendResult: ApiResult[(Int, TxnTransitMetadata)] = txnManager.getTransactionState(transactionalId).flatMap {
+778          case None =&gt;
+779            Left(Errors.INVALID_PRODUCER_ID_MAPPING)
+780
+781          case Some(epochAndTxnMetadata) =&gt;
+782            val txnMetadata = epochAndTxnMetadata.transactionMetadata
+783            val coordinatorEpoch = epochAndTxnMetadata.coordinatorEpoch
+784
+785            txnMetadata.inLock(() =&gt; {
+786              producerIdCopy = txnMetadata.producerId</code></pre></details>
+<details class="code" id="ev-txn-timeout"><summary>txn-timeout · TransactionStateManager.scala:128</summary><p>Timeout selection is for eligible ONGOING transactions, not prepared decisions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L128">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>128    def timedOutTransactions(): Iterable[TransactionalIdAndProducerIdEpoch] = {
+129      val now = time.milliseconds()
+130      inReadLock(stateLock, () =&gt; {
+131        transactionMetadataCache.flatMap { case (_, entry) =&gt;
+132          entry.metadataPerTransactionalId.asScala.filter { case (_, txnMetadata) =&gt;
+133            if (txnMetadata.pendingTransitionInProgress) {
+134              false
+135            } else {
+136              txnMetadata.state match {
+137                case TransactionState.ONGOING =&gt;
+138                  // Do not apply timeout to distributed two phase commit transactions.
+139                  (!txnMetadata.isDistributedTwoPhaseCommitTxn) &amp;&amp;
+140                  (txnMetadata.txnStartTimestamp + txnMetadata.txnTimeoutMs &lt; now)
+141                case _ =&gt; false
+142              }
+143            }
+144          }.map { case (txnId, txnMetadata) =&gt;
+145            new TransactionalIdAndProducerIdEpoch(txnId, txnMetadata.producerId, txnMetadata.producerEpoch)
+146          }
+147        }
+148      })
+149    }
+150
+151    private def removeExpiredTransactionalIds(
+152      transactionPartition: TopicPartition,
+153      txnMetadataCacheEntry: TxnMetadataCacheEntry,
+154    ): Unit = {
+155      inReadLock[Exception](stateLock, () =&gt; {</code></pre></details>
+<details class="code" id="ev-marker-schema"><summary>marker-schema · WriteTxnMarkersRequest.json:17</summary><p>Exact marker request fields and TransactionVersion gate are source-generated protocol definitions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/WriteTxnMarkersRequest.json#L17">clients/src/main/resources/common/message/WriteTxnMarkersRequest.json</a></p><pre class="guide-pre"><code>17    &quot;apiKey&quot;: 27,
+18    &quot;type&quot;: &quot;request&quot;,
+19    &quot;listeners&quot;: [&quot;broker&quot;],
+20    &quot;name&quot;: &quot;WriteTxnMarkersRequest&quot;,
+21    // Version 0 was removed in Apache Kafka 4.0, Version 1 is the new baseline.
+22    //
+23    // Version 1 enables flexible versions.
+24    // Version 2 adds TransactionVersion field to the WritableTxnMarker (KIP-1228).
+25    &quot;validVersions&quot;: &quot;1-2&quot;,
+26    &quot;flexibleVersions&quot;: &quot;1+&quot;,
+27    &quot;fields&quot;: [
+28      { &quot;name&quot;: &quot;Markers&quot;, &quot;type&quot;: &quot;[]WritableTxnMarker&quot;, &quot;versions&quot;: &quot;0+&quot;,
+29        &quot;about&quot;: &quot;The transaction markers to be written.&quot;, &quot;fields&quot;: [
+30        { &quot;name&quot;: &quot;ProducerId&quot;, &quot;type&quot;: &quot;int64&quot;, &quot;versions&quot;: &quot;0+&quot;, &quot;entityType&quot;: &quot;producerId&quot;,
+31          &quot;about&quot;: &quot;The current producer ID.&quot;},
+32        { &quot;name&quot;: &quot;ProducerEpoch&quot;, &quot;type&quot;: &quot;int16&quot;, &quot;versions&quot;: &quot;0+&quot;,
+33          &quot;about&quot;: &quot;The current epoch associated with the producer ID.&quot; },
+34        { &quot;name&quot;: &quot;TransactionResult&quot;, &quot;type&quot;: &quot;bool&quot;, &quot;versions&quot;: &quot;0+&quot;,
+35          &quot;about&quot;: &quot;The result of the transaction to write to the partitions (false = ABORT, true = COMMIT).&quot; },
+36        { &quot;name&quot;: &quot;Topics&quot;, &quot;type&quot;: &quot;[]WritableTxnMarkerTopic&quot;, &quot;versions&quot;: &quot;0+&quot;,
+37          &quot;about&quot;: &quot;Each topic that we want to write transaction marker(s) for.&quot;, &quot;fields&quot;: [
+38          { &quot;name&quot;: &quot;Name&quot;, &quot;type&quot;: &quot;string&quot;, &quot;versions&quot;: &quot;0+&quot;, &quot;entityType&quot;: &quot;topicName&quot;,
+39            &quot;about&quot;: &quot;The topic name.&quot; },
+40          { &quot;name&quot;: &quot;PartitionIndexes&quot;, &quot;type&quot;: &quot;[]int32&quot;, &quot;versions&quot;: &quot;0+&quot;,
+41            &quot;about&quot;: &quot;The indexes of the partitions to write transaction markers for.&quot; }
+42        ]},
+43        { &quot;name&quot;: &quot;CoordinatorEpoch&quot;, &quot;type&quot;: &quot;int32&quot;, &quot;versions&quot;: &quot;0+&quot;,
+44          &quot;about&quot;: &quot;Epoch associated with the transaction state partition hosted by this transaction coordinator.&quot; },</code></pre></details>
+<details class="code" id="ev-txn-reload"><summary>txn-reload · TransactionStateManager.scala:538</summary><p>Recovered PREPARE_COMMIT/PREPARE_ABORT states regenerate marker work.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L538">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>538    def loadTransactionsForTxnTopicPartition(partitionId: Int, coordinatorEpoch: Int, sendTxnMarkers: SendTxnMarkersCallback): Unit = {
+539      val topicPartition = new TopicPartition(Topic.TRANSACTION_STATE_TOPIC_NAME, partitionId)
+540      val partitionAndLeaderEpoch = new TransactionPartitionAndLeaderEpoch(partitionId, coordinatorEpoch)
+541
+542      inWriteLock(stateLock, () =&gt; {
+543        loadingPartitions.add(partitionAndLeaderEpoch)
+544      })
+545
+546      def loadTransactions(startTimeMs: java.lang.Long): Unit = {
+547        val schedulerTimeMs = time.milliseconds() - startTimeMs
+548        info(s&quot;Loading transaction metadata from $topicPartition at epoch $coordinatorEpoch&quot;)
+549        validateTransactionTopicPartitionCountIsStable()
+550
+551        val loadedTransactions = loadTransactionMetadata(topicPartition, coordinatorEpoch)
+552        val endTimeMs = time.milliseconds()
+553        val totalLoadingTimeMs = endTimeMs - startTimeMs
+554        partitionLoadSensor.record(totalLoadingTimeMs.toDouble, endTimeMs, false)
+555        info(s&quot;Finished loading ${loadedTransactions.size} transaction metadata from $topicPartition in &quot; +
+556          s&quot;$totalLoadingTimeMs milliseconds, of which $schedulerTimeMs milliseconds was spent in the scheduler.&quot;)
+557
+558        inWriteLock[Exception](stateLock, () =&gt; {
+559          if (loadingPartitions.contains(partitionAndLeaderEpoch)) {
+560            addLoadedTransactionsToCache(topicPartition.partition, coordinatorEpoch, loadedTransactions)
+561
+562            val transactionsPendingForCompletion = new mutable.ListBuffer[TransactionalIdCoordinatorEpochAndTransitMetadata]
+563            loadedTransactions.forEach((transactionalId, txnMetadata) =&gt; {
+564              txnMetadata.inLock(() =&gt; {
+565                // if state is PrepareCommit or PrepareAbort we need to complete the transaction</code></pre></details>
+<details class="code" id="ev-txn-append"><summary>txn-append · TransactionStateManager.scala:648</summary><p>Transaction metadata is replicated through the ordinary log append path, with ownership checks.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L648">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>648    def appendTransactionToLog(transactionalId: String,
+649                               coordinatorEpoch: Int,
+650                               newMetadata: TxnTransitMetadata,
+651                               responseCallback: Errors =&gt; Unit,
+652                               retryOnError: Errors =&gt; Boolean = _ =&gt; false,
+653                               requestLocal: RequestLocal): Unit = {
+654
+655      // generate the message for this transaction metadata
+656      val keyBytes = TransactionLog.keyToBytes(transactionalId)
+657      val valueBytes = TransactionLog.valueToBytes(newMetadata, transactionVersionLevel())
+658      val timestamp = time.milliseconds()
+659
+660      val records = MemoryRecords.withRecords(Compression.NONE, new SimpleRecord(timestamp, keyBytes, valueBytes))
+661      val transactionStateTopicPartition = new TopicPartition(Topic.TRANSACTION_STATE_TOPIC_NAME, partitionFor(transactionalId))
+662      val transactionStateTopicIdPartition = replicaManager.topicIdPartition(transactionStateTopicPartition)
+663      val recordsPerPartition = Map(transactionStateTopicIdPartition -&gt; records)
+664
+665      // set the callback function to update transaction status in cache after log append completed
+666      def updateCacheCallback(responseStatus: util.Map[TopicIdPartition, PartitionResponse]): Unit = {
+667        // the append response should only contain the topics partition
+668        if (responseStatus.size != 1 || !responseStatus.containsKey(transactionStateTopicIdPartition))
+669          throw new IllegalStateException(&quot;Append status %s should only have one partition %s&quot;
+670            .format(responseStatus, transactionStateTopicPartition))
+671
+672        val status = responseStatus.get(transactionStateTopicIdPartition)
+673
+674        var responseError = if (status.error == Errors.NONE) {
+675          Errors.NONE</code></pre></details>
+<details class="code" id="ev-txn-markers"><summary>txn-markers · TransactionMarkerChannelManager.scala:270</summary><p>Marker work is grouped by current participant leaders; completion follows removal of pending participants.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala#L270">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala</a></p><pre class="guide-pre"><code>270    def addTxnMarkersToSend(coordinatorEpoch: Int,
+271                            txnResult: TransactionResult,
+272                            txnMetadata: TransactionMetadata,
+273                            newMetadata: TxnTransitMetadata): Unit = {
+274      val transactionalId = txnMetadata.transactionalId
+275      val pendingCompleteTxn = new PendingCompleteTxn(
+276        transactionalId,
+277        coordinatorEpoch,
+278        txnMetadata,
+279        newMetadata)
+280
+281      val prev = transactionsWithPendingMarkers.put(transactionalId, pendingCompleteTxn)
+282      if (prev != null) {
+283        info(s&quot;Replaced an existing pending complete txn $prev with $pendingCompleteTxn while adding markers to send.&quot;)
+284      }
+285      addTxnMarkersToBrokerQueue(txnMetadata.producerId,
+286        txnMetadata.producerEpoch, txnResult, pendingCompleteTxn, txnMetadata.topicPartitions.asScala.toSet)
+287      maybeWriteTxnCompletion(transactionalId)
+288    }
+289
+290    def numTxnsWithPendingMarkers: Int = transactionsWithPendingMarkers.size
+291
+292    private def hasPendingMarkersToWrite(txnMetadata: TransactionMetadata): Boolean = {
+293      txnMetadata.inLock(() =&gt;
+294        !txnMetadata.topicPartitions.isEmpty
+295      )
+296    }
+297</code></pre></details>
+<details class="code" id="ev-txn-retry"><summary>txn-retry · TransactionMarkerRequestCompletionHandler.scala:37</summary><p>Disconnect/retriable partition errors requeue markers; stale coordinator work is cancelled.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandler.scala#L37">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandler.scala</a></p><pre class="guide-pre"><code>37    override def onComplete(response: ClientResponse): Unit = {
+38      val requestHeader = response.requestHeader
+39      val correlationId = requestHeader.correlationId
+40      if (response.wasDisconnected) {
+41        trace(s&quot;Cancelled request with header $requestHeader due to node ${response.destination} being disconnected&quot;)
+42
+43        for (pendingCompleteTxnAndMarker &lt;- pendingCompleteTxnAndMarkerEntries.asScala) {
+44          val pendingCompleteTxn = pendingCompleteTxnAndMarker.pendingCompleteTxn
+45          val transactionalId = pendingCompleteTxn.transactionalId
+46          val txnMarker = pendingCompleteTxnAndMarker.txnMarkerEntry
+47
+48          txnStateManager.getTransactionState(transactionalId) match {
+49
+50            case Left(Errors.NOT_COORDINATOR) =&gt;
+51              info(s&quot;I am no longer the coordinator for $transactionalId; cancel sending transaction markers $txnMarker to the brokers&quot;)
+52
+53              txnMarkerChannelManager.removeMarkersForTxn(pendingCompleteTxn)
+54
+55            case Left(Errors.COORDINATOR_LOAD_IN_PROGRESS) =&gt;
+56              info(s&quot;I am loading the transaction partition that contains $transactionalId which means the current markers have to be obsoleted; &quot; +
+57                s&quot;cancel sending transaction markers $txnMarker to the brokers&quot;)
+58
+59              txnMarkerChannelManager.removeMarkersForTxn(pendingCompleteTxn)
+60
+61            case Left(unexpectedError) =&gt;
+62              throw new IllegalStateException(s&quot;Unhandled error $unexpectedError when fetching current transaction state&quot;)
+63
+64            case Right(None) =&gt;</code></pre></details>
+<details class="code" id="ev-marker-handler"><summary>marker-handler · KafkaApis.scala:1748</summary><p>Participant brokers append control batches; __consumer_offsets markers use the group coordinator completion path.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L1748">core/src/main/scala/kafka/server/KafkaApis.scala</a></p><pre class="guide-pre"><code>1748    def handleWriteTxnMarkersRequest(request: Request, requestLocal: RequestLocal): Unit = {
+1749      // We are checking for AlterCluster permissions first. If it is not present, we are authorizing cluster operation
+1750      // The latter will throw an exception if it is denied.
+1751      if (!authHelper.authorize(request.context, ALTER, CLUSTER, CLUSTER_NAME, true, false, 1)) {
+1752        authHelper.authorizeClusterOperation(request, CLUSTER_ACTION)
+1753      }
+1754      val writeTxnMarkersRequest = request.body(classOf[WriteTxnMarkersRequest])
+1755      val errors = new ConcurrentHashMap[java.lang.Long, util.Map[TopicPartition, Errors]]()
+1756      // List of transaction marker entries, each containing producer metadata, transaction result (commit/abort),
+1757      // target partitions, and transaction version.
+1758      val markers = writeTxnMarkersRequest.markers
+1759      val numAppends = new AtomicInteger(markers.size)
+1760
+1761      if (numAppends.get == 0) {
+1762        requestHelper.sendResponseExemptThrottle(request, new WriteTxnMarkersResponse(errors))
+1763        return
+1764      }
+1765
+1766      def updateErrors(producerId: Long, currentErrors: ConcurrentHashMap[TopicPartition, Errors]): Unit = {
+1767        val previousErrors = errors.putIfAbsent(producerId, currentErrors)
+1768        if (previousErrors != null)
+1769          previousErrors.putAll(currentErrors)
+1770      }
+1771
+1772      /**
+1773        * This is the call back invoked when a log append of transaction markers succeeds. This can be called multiple
+1774        * times when handling a single WriteTxnMarkersRequest because there is one append per TransactionMarker in the
+1775        * request, so there could be multiple appends of markers to the log. The final response will be sent only</code></pre></details>
+<details class="code" id="ev-marker-fence"><summary>marker-fence · ProducerAppendInfo.java:246</summary><p>Participant producer state rejects marker coordinator epochs older than the highest observed epoch.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java#L246">storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java</a></p><pre class="guide-pre"><code>246      private void checkCoordinatorEpoch(EndTransactionMarker endTxnMarker, long offset) {
+247          if (updatedEntry.coordinatorEpoch() &gt; endTxnMarker.coordinatorEpoch()) {
+248              if (origin == AppendOrigin.REPLICATION) {
+249                  log.info(&quot;Detected invalid coordinator epoch for producerId {} at offset {} in partition {}: {} is older than previously known coordinator epoch {}&quot;,
+250                          producerId, offset, topicPartition, endTxnMarker.coordinatorEpoch(), updatedEntry.coordinatorEpoch());
+251              } else {
+252                  throw new TransactionCoordinatorFencedException(&quot;Invalid coordinator epoch for producerId &quot; + producerId + &quot; at &quot; +
+253                          &quot;offset &quot; + offset + &quot; in partition &quot; + topicPartition + &quot;: &quot; + endTxnMarker.coordinatorEpoch() +
+254                          &quot; (zombie), &quot; + updatedEntry.coordinatorEpoch() + &quot; (current)&quot;);
+255              }
+256          }
+257      }
+258
+259      public Optional&lt;CompletedTxn&gt; appendEndTxnMarker(EndTransactionMarker endTxnMarker,
+260                                                       short producerEpoch,
+261                                                       long offset,
+262                                                       long timestamp,
+263                                                       short transactionVersion) {
+264          // For replication (REPLICATION origin), TV_UNKNOWN is allowed because:
+265          // 1. transactionVersion is not stored in MemoryRecords - it's only metadata in WriteTxnMarkersRequest
+266          // 2. When records are replicated, followers only see MemoryRecords without transactionVersion
+267          // 3. The leader already validated the marker with the correct transactionVersion (e.g., TV2 strict validation)
+268          // 4. Using TV_0 validation (markerEpoch &gt;= currentEpoch) is safe because it's more permissive than TV2
+269          //    (markerEpoch &gt; currentEpoch), so any marker that passed TV2 validation will pass TV_0 validation
+270          // For all other origins (CLIENT, COORDINATOR), transactionVersion must be explicitly specified.
+271          if (transactionVersion == TV_UNKNOWN &amp;&amp; origin != AppendOrigin.REPLICATION) {
+272              throw new IllegalArgumentException(&quot;transactionVersion must be explicitly specified, &quot; +
+273                      &quot;cannot use default value TV_UNKNOWN for origin &quot; + origin);</code></pre></details>
+<details class="code" id="ev-marker-append"><summary>marker-append · ProducerAppendInfo.java:259</summary><p>Producer epoch checks differ by transaction version; marker data updates producer/transaction state.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java#L259">storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java</a></p><pre class="guide-pre"><code>259      public Optional&lt;CompletedTxn&gt; appendEndTxnMarker(EndTransactionMarker endTxnMarker,
+260                                                       short producerEpoch,
+261                                                       long offset,
+262                                                       long timestamp,
+263                                                       short transactionVersion) {
+264          // For replication (REPLICATION origin), TV_UNKNOWN is allowed because:
+265          // 1. transactionVersion is not stored in MemoryRecords - it's only metadata in WriteTxnMarkersRequest
+266          // 2. When records are replicated, followers only see MemoryRecords without transactionVersion
+267          // 3. The leader already validated the marker with the correct transactionVersion (e.g., TV2 strict validation)
+268          // 4. Using TV_0 validation (markerEpoch &gt;= currentEpoch) is safe because it's more permissive than TV2
+269          //    (markerEpoch &gt; currentEpoch), so any marker that passed TV2 validation will pass TV_0 validation
+270          // For all other origins (CLIENT, COORDINATOR), transactionVersion must be explicitly specified.
+271          if (transactionVersion == TV_UNKNOWN &amp;&amp; origin != AppendOrigin.REPLICATION) {
+272              throw new IllegalArgumentException(&quot;transactionVersion must be explicitly specified, &quot; +
+273                      &quot;cannot use default value TV_UNKNOWN for origin &quot; + origin);
+274          }
+275          // For replication with TV_UNKNOWN, use legacy validation (TV_0 behavior) since the leader already
+276          // performed strict validation and the follower doesn't have access to the original transactionVersion
+277          short effectiveTransactionVersion = (transactionVersion == TV_UNKNOWN) ? 0 : transactionVersion;
+278          checkProducerEpoch(producerEpoch, offset, effectiveTransactionVersion);
+279          checkCoordinatorEpoch(endTxnMarker, offset);
+280
+281          // Only emit the `CompletedTxn` for non-empty transactions. A transaction marker
+282          // without any associated data will not have any impact on the last stable offset
+283          // and would not need to be reflected in the transaction index.
+284          Optional&lt;CompletedTxn&gt; completedTxn = updatedEntry.currentTxnFirstOffset().isPresent() ?
+285                  Optional.of(new CompletedTxn(producerId, updatedEntry.currentTxnFirstOffset().getAsLong(), offset,
+286                          endTxnMarker.controlType() == ControlRecordType.ABORT))</code></pre></details>
+<details class="code" id="ev-unstable"><summary>unstable · ProducerStateManager.java:246</summary><p>Undecided transactions and markers not yet below the high watermark both hold back stable visibility.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerStateManager.java#L246">storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerStateManager.java</a></p><pre class="guide-pre"><code>246      public Optional&lt;LogOffsetMetadata&gt; firstUnstableOffset() {
+247          Optional&lt;LogOffsetMetadata&gt; unreplicatedFirstOffset = Optional.ofNullable(unreplicatedTxns.firstEntry()).map(e -&gt; e.getValue().firstOffset);
+248          Optional&lt;LogOffsetMetadata&gt; undecidedFirstOffset = Optional.ofNullable(ongoingTxns.firstEntry()).map(e -&gt; e.getValue().firstOffset);
+249
+250          if (unreplicatedFirstOffset.isEmpty())
+251              return undecidedFirstOffset;
+252          else if (undecidedFirstOffset.isEmpty())
+253              return unreplicatedFirstOffset;
+254          else if (undecidedFirstOffset.get().messageOffset &lt; unreplicatedFirstOffset.get().messageOffset)
+255              return undecidedFirstOffset;
+256          else
+257              return unreplicatedFirstOffset;
+258      }
+259
+260      /**
+261       * Acknowledge all transactions which have been completed before a given offset. This allows the LSO
+262       * to advance to the next unstable offset.
+263       */
+264      public void onHighWatermarkUpdated(long highWatermark) {
+265          removeUnreplicatedTransactions(highWatermark);
+266      }
+267
+268      /**
+269       * The first undecided offset is the earliest transactional message which has not yet been committed
+270       * or aborted. Unlike [[firstUnstableOffset]], this does not reflect the state of replication (i.e.
+271       * whether a completed transaction marker is beyond the high watermark).
+272       */
+273      public OptionalLong firstUndecidedOffset() {</code></pre></details>
+<details class="code" id="ev-lso"><summary>lso · UnifiedLog.java:678</summary><p>The exclusive stable boundary is min(high watermark, earliest unstable transaction offset).</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java#L678">storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java</a></p><pre class="guide-pre"><code>678      public long lastStableOffset() {
+679          // cache the first unstable offset metadata to avoid a concurrent update breaking the isPresent check
+680          Optional&lt;LogOffsetMetadata&gt; firstUnstableOffsetMetadataCopy = firstUnstableOffsetMetadata;
+681          if (firstUnstableOffsetMetadataCopy.isPresent() &amp;&amp; firstUnstableOffsetMetadataCopy.get().messageOffset &lt; highWatermark()) {
+682              return firstUnstableOffsetMetadataCopy.get().messageOffset;
+683          } else {
+684              return highWatermark();
+685          }
+686      }
+687
+688      public long lastStableOffsetLag() {
+689          return highWatermark() - lastStableOffset();
+690      }
+691
+692      /**
+693       * Fully materialize and return an offset snapshot including segment position info. This method will update
+694       * the LogOffsetMetadata for the high watermark and last stable offset if they are message-only. Throws an
+695       * offset out of range error if the segment info cannot be loaded.
+696       */
+697      public LogOffsetSnapshot fetchOffsetSnapshot() throws IOException {
+698          LogOffsetMetadata lastStable = fetchLastStableOffsetMetadata();
+699          LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
+700          return new LogOffsetSnapshot(
+701                  logStartOffset,
+702                  localLog.logEndOffsetMetadata(),
+703                  highWatermark,
+704                  lastStable
+705          );</code></pre></details>
+<details class="code" id="ev-test-marker-timeout"><summary>test-marker-timeout · CoordinatorRuntimeTest.java:1418</summary><p>Test exercises timeout during group-coordinator marker completion.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java#L1418">coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java</a></p><pre class="guide-pre"><code>1418      public void testScheduleTransactionCompletionWhenWriteTimesOut() throws InterruptedException {
+1419          MockTimer timer = new MockTimer();
+1420          MockPartitionWriter writer = new MockPartitionWriter();
+1421
+1422          CoordinatorRuntime&lt;MockCoordinatorShard, String&gt; runtime =
+1423              new CoordinatorRuntime.Builder&lt;MockCoordinatorShard, String&gt;()
+1424                  .withTime(timer.time())
+1425                  .withTimer(timer)
+1426                  .withWriteTimeout(DEFAULT_WRITE_TIMEOUT)
+1427                  .withLoader(new MockCoordinatorLoader())
+1428                  .withEventProcessor(new DirectEventProcessor())
+1429                  .withPartitionWriter(writer)
+1430                  .withCoordinatorShardBuilderSupplier(new MockCoordinatorShardBuilderSupplier())
+1431                  .withCoordinatorRuntimeMetrics(mock(CoordinatorRuntimeMetrics.class))
+1432                  .withCoordinatorMetrics(mock(CoordinatorMetrics.class))
+1433                  .withSerializer(new StringSerializer())
+1434                  .withExecutorService(mock(ExecutorService.class))
+1435                  .withCachedBufferMaxBytesSupplier(() -&gt; CACHED_BUFFER_MAX_BYTES)
+1436                  .build();
+1437
+1438          // Loads the coordinator.
+1439          runtime.scheduleLoadOperation(TP, 10);
+1440
+1441          // Verify the initial state.
+1442          CoordinatorRuntime&lt;MockCoordinatorShard, String&gt;.CoordinatorContext ctx = runtime.contextOrThrow(TP);
+1443          assertEquals(0, ctx.coordinator.lastWrittenOffset());
+1444          assertEquals(0, ctx.coordinator.lastCommittedOffset());
+1445          assertEquals(List.of(0L), ctx.coordinator.snapshotRegistry().epochsList());</code></pre></details>
+<details class="code" id="ev-test-txn-reload"><summary>test-txn-reload · TransactionStateManagerTest.scala:285</summary><p>Inspected test rebuilds transaction state from multiple log records and removes it on resignation.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionStateManagerTest.scala#L285">core/src/test/scala/unit/kafka/coordinator/transaction/TransactionStateManagerTest.scala</a></p><pre class="guide-pre"><code>285    def testLoadAndRemoveTransactionsForPartition(): Unit = {
+286      // generate transaction log messages for two pids traces:
+287
+288      // pid1's transaction started with two partitions
+289      txnMetadata1.state(TransactionState.ONGOING)
+290      txnMetadata1.addPartitions(util.Set.of(new TopicPartition(&quot;topic1&quot;, 0),
+291        new TopicPartition(&quot;topic1&quot;, 1)))
+292
+293      txnRecords += new SimpleRecord(txnMessageKeyBytes1, TransactionLog.valueToBytes(txnMetadata1.prepareNoTransit(), TV_2))
+294
+295      // pid1's transaction adds three more partitions
+296      txnMetadata1.addPartitions(util.Set.of(new TopicPartition(&quot;topic2&quot;, 0),
+297        new TopicPartition(&quot;topic2&quot;, 1),
+298        new TopicPartition(&quot;topic2&quot;, 2)))
+299
+300      txnRecords += new SimpleRecord(txnMessageKeyBytes1, TransactionLog.valueToBytes(txnMetadata1.prepareNoTransit(), TV_2))
+301
+302      // pid1's transaction is preparing to commit
+303      txnMetadata1.state(TransactionState.PREPARE_COMMIT)
+304
+305      txnRecords += new SimpleRecord(txnMessageKeyBytes1, TransactionLog.valueToBytes(txnMetadata1.prepareNoTransit(), TV_2))
+306
+307      // pid2's transaction started with three partitions
+308      txnMetadata2.state(TransactionState.ONGOING)
+309      txnMetadata2.addPartitions(util.Set.of(new TopicPartition(&quot;topic3&quot;, 0),
+310        new TopicPartition(&quot;topic3&quot;, 1),
+311        new TopicPartition(&quot;topic3&quot;, 2)))
+312</code></pre></details>
+<details class="code" id="ev-test-marker-retry"><summary>test-marker-retry · TransactionMarkerRequestCompletionHandlerTest.scala:66</summary><p>Inspected test verifies marker requeue on disconnected broker.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala#L66">core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala</a></p><pre class="guide-pre"><code>66    def shouldReEnqueuePartitionsWhenBrokerDisconnected(): Unit = {
+67      mockCache()
+68
+69      handler.onComplete(new ClientResponse(new RequestHeader(ApiKeys.PRODUCE, 0, &quot;client&quot;, 1),
+70        null, null, 0, 0, true, null, null, null))
+71
+72      verify(markerChannelManager).addTxnMarkersToBrokerQueue(producerId,
+73        producerEpoch, txnResult, pendingCompleteTxnAndMarkers.get(0).pendingCompleteTxn,
+74        Set[TopicPartition](topicPartition))
+75    }
+76
+77    @Test
+78    def shouldThrowIllegalStateExceptionIfErrorCodeNotAvailableForPid(): Unit = {
+79      mockCache()
+80
+81      val response = new WriteTxnMarkersResponse(new java.util.HashMap[java.lang.Long, java.util.Map[TopicPartition, Errors]]())
+82
+83      assertThrows(classOf[IllegalStateException], () =&gt; handler.onComplete(new ClientResponse(new RequestHeader(
+84        ApiKeys.PRODUCE, 0, &quot;client&quot;, 1), null, null, 0, 0, false, null, null, response)))
+85    }
+86
+87    @Test
+88    def shouldCompleteDelayedOperationWhenNoErrors(): Unit = {
+89      mockCache()
+90
+91      verifyCompleteDelayedOperationOnError(Errors.NONE)
+92    }
+93</code></pre></details>
+<details class="code" id="ev-test-marker-stale"><summary>test-marker-stale · TransactionMarkerRequestCompletionHandlerTest.scala:111</summary><p>Inspected test cancels stale work after coordinator epoch changes.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala#L111">core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala</a></p><pre class="guide-pre"><code>111    def shouldCompleteDelayedOperationWhenCoordinatorEpochChanged(): Unit = {
+112      when(txnStateManager.getTransactionState(ArgumentMatchers.eq(transactionalId)))
+113        .thenReturn(Right(Some(new CoordinatorEpochAndTxnMetadata(coordinatorEpoch+1, txnMetadata))))
+114
+115      verifyRemoveDelayedOperationOnError(Errors.NONE)
+116    }
+117
+118    @Test
+119    def shouldCompleteDelayedOperationWhenInvalidProducerEpoch(): Unit = {
+120      mockCache()
+121
+122      verifyRemoveDelayedOperationOnError(Errors.INVALID_PRODUCER_EPOCH)
+123    }
+124
+125    @Test
+126    def shouldCompleteDelayedOperationWhenCoordinatorEpochFenced(): Unit = {
+127      mockCache()
+128
+129      verifyRemoveDelayedOperationOnError(Errors.TRANSACTION_COORDINATOR_FENCED)
+130    }
+131
+132    @Test
+133    def shouldThrowIllegalStateExceptionWhenUnknownError(): Unit = {
+134      verifyThrowIllegalStateExceptionOnError(Errors.UNKNOWN_SERVER_ERROR)
+135    }
+136
+137    @Test
+138    def shouldThrowIllegalStateExceptionWhenCorruptMessageError(): Unit = {</code></pre></details>
+<details class="code" id="ev-test-stable"><summary>test-stable · ProducerStateManagerTest.java:1244</summary><p>Test covers stable-offset calculation across interleaved transactions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/test/java/org/apache/kafka/storage/internals/log/ProducerStateManagerTest.java#L1244">storage/src/test/java/org/apache/kafka/storage/internals/log/ProducerStateManagerTest.java</a></p><pre class="guide-pre"><code>1244      public void testLastStableOffsetCompletedTxn() {
+1245          long segmentBaseOffset = 990000L;
+1246
+1247          long producerId1 = producerId;
+1248          long startOffset1 = 992342L;
+1249          beginTransaction(producerId1, startOffset1, segmentBaseOffset);
+1250
+1251          long producerId2 = producerId + 1;
+1252          long startOffset2 = startOffset1 + 25;
+1253          beginTransaction(producerId2, startOffset2, segmentBaseOffset);
+1254
+1255          long producerId3 = producerId + 2;
+1256          long startOffset3 = startOffset1 + 57;
+1257          beginTransaction(producerId3, startOffset3, segmentBaseOffset);
+1258
+1259          long lastOffset1 = startOffset3 + 15;
+1260          CompletedTxn completedTxn1 = new CompletedTxn(producerId1, startOffset1, lastOffset1, false);
+1261          assertEquals(startOffset2, stateManager.lastStableOffset(completedTxn1));
+1262          stateManager.completeTxn(completedTxn1);
+1263          stateManager.onHighWatermarkUpdated(lastOffset1 + 1);
+1264
+1265          assertEquals(Optional.of(startOffset2), stateManager.firstUnstableOffset().map(x -&gt; x.messageOffset));
+1266
+1267          long lastOffset3 = lastOffset1 + 20;
+1268          CompletedTxn completedTxn3 = new CompletedTxn(producerId3, startOffset3, lastOffset3, false);
+1269          assertEquals(startOffset2, stateManager.lastStableOffset(completedTxn3));
+1270          stateManager.completeTxn(completedTxn3);
+1271          stateManager.onHighWatermarkUpdated(lastOffset3 + 1);</code></pre></details><p>Supporting versioned references: <a href="https://kafka.apache.org/41/design/protocol/">Kafka 4.1 protocol reference</a> (older than this source snapshot), and <a href="https://cwiki.apache.org/confluence/spaces/KAFKA/pages/255070434/KIP-932%2BQueues%2Bfor%2BKafka">KIP-932 share-group design</a>. Source wins where versioned documentation or proposals differ.</p><p><a href="kafka-recovery-validation.json">Artifact validation and source manifest</a></p></section><footer><a href="index.html">Field guide home</a><a href="kafka-rpc-atlas.html">Complete Kafka RPC schema atlas</a></footer></main></div></body></html>

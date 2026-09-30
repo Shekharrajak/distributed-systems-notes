@@ -1,0 +1,1107 @@
+{
+  "sourceRevisions": {
+    "Kafka": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81",
+    "flink-connector-kafka": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b",
+    "spark": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+  },
+  "sourceInspectionOnly": true,
+  "engineTestsRun": false,
+  "snippetsRun": false,
+  "liveFaultInjectionRun": false,
+  "pages": [
+    "kafka-offset-commits-flink-spark.html"
+  ],
+  "diagrams": [
+    "offset-authority",
+    "offset-frontier",
+    "offset-sync-async",
+    "offset-threads",
+    "offset-rpc",
+    "offset-stale-retry",
+    "offset-flink",
+    "offset-spark",
+    "offset-dstream"
+  ],
+  "evidence": [
+    {
+      "repo": "Kafka",
+      "id": "api-sync",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java",
+      "needle": "public void commitSync()",
+      "claim": "Public sync API delegates to the selected consumer implementation. Read its preceding timeout and callback contract.",
+      "line": 964,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L964",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "api-async",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java",
+      "needle": "public void commitAsync(final Map<TopicPartition, OffsetAndMetadata> offsets",
+      "claim": "Explicit offsets are copied. The preceding contract documents ordered async requests/callbacks and next-offset semantics.",
+      "line": 1183,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L1183",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "api-order-caveat",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java",
+      "needle": "but only when the consumer is using the consumer group protocol.",
+      "claim": "The pinned commitSync Javadoc qualifies its prior-async-callback guarantee by group protocol; do not erase this version-specific caveat.",
+      "line": 936,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L936",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "delegate",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java",
+      "needle": "GroupProtocol groupProtocol =",
+      "claim": "group.protocol selects ClassicKafkaConsumer or AsyncKafkaConsumer, independently of the commit method name.",
+      "line": 61,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java#L61",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "classic-sync",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java",
+      "needle": "public boolean commitOffsetsSync",
+      "claim": "Classic sync commit polls responses and retries retriable failures within the timer.",
+      "line": 1146,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1146",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "classic-async",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java",
+      "needle": "public RequestFuture<Void> commitOffsetsAsync",
+      "claim": "Classic async commit discovers the coordinator, submits without waiting for the acknowledgement, and queues completions.",
+      "line": 1052,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1052",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "classic-callback",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java",
+      "needle": "void invokeCompletedOffsetCommitCallbacks()",
+      "claim": "Completed callbacks are drained by consumer operations, not by a producer Sender thread.",
+      "line": 1037,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1037",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "async-app",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java",
+      "needle": "private void commitAsync(Optional",
+      "claim": "The application creates an AsyncCommitEvent and queues the user callback after the future completes.",
+      "line": 1112,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1112",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "async-sync",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java",
+      "needle": "private void commitSync(Optional",
+      "claim": "SyncCommitEvent waits for pending async completions and its own result under a timer.",
+      "line": 1805,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1805",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "async-handoff",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java",
+      "needle": "private CompletableFuture<Map<TopicPartition, OffsetAndMetadata>> commit(final CommitEvent",
+      "claim": "Even the async API can wait for the background thread to capture offsetsReady; async does not mean zero blocking work.",
+      "line": 1135,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1135",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "commit-manager-async",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java",
+      "needle": "public CompletableFuture<Map<TopicPartition, OffsetAndMetadata>> commitAsync",
+      "claim": "Explicit async commits are not retried after an errored attempt by this manager.",
+      "line": 401,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java#L401",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "commit-manager-sync",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java",
+      "needle": "private void commitSyncWithRetries",
+      "claim": "Explicit sync commits retry retriable errors until the deadline, with non-retriable errors surfaced.",
+      "line": 463,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java#L463",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "callback-thread",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/OffsetCommitCallbackInvoker.java",
+      "needle": "Utility class that helps the application thread",
+      "claim": "Background completion queues callbacks; the consumer application thread executes them during poll/commit/close.",
+      "line": 28,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/OffsetCommitCallbackInvoker.java#L28",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "network-event",
+      "file": "clients/src/main/java/org/apache/kafka/clients/consumer/internals/events/ApplicationEventProcessor.java",
+      "needle": "private void process(final AsyncCommitEvent event)",
+      "claim": "The consumer network thread translates application commit events into CommitRequestManager work.",
+      "line": 253,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/events/ApplicationEventProcessor.java#L253",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "wire-request",
+      "file": "clients/src/main/resources/common/message/OffsetCommitRequest.json",
+      "needle": "\"apiKey\": 8",
+      "claim": "Both commit APIs use OffsetCommit API 8. Version 9 supports the consumer protocol; version 10 uses topic IDs.",
+      "line": 17,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/OffsetCommitRequest.json#L17",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "wire-response",
+      "file": "clients/src/main/resources/common/message/OffsetCommitResponse.json",
+      "needle": "\"name\": \"ThrottleTimeMs\"",
+      "claim": "The response contains throttle time and per-topic/per-partition error codes, not an output-transaction result.",
+      "line": 54,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/OffsetCommitResponse.json#L54",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "broker-commit",
+      "file": "core/src/main/scala/kafka/server/KafkaApis.scala",
+      "needle": "def handleOffsetCommitRequest",
+      "claim": "Broker authorizes group and topics, resolves topic identity, validates partitions, then delegates to the group coordinator.",
+      "line": 279,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L279",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "coordinator-commit",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java",
+      "needle": "public CompletableFuture<OffsetCommitResponseData> commitOffsets",
+      "claim": "The group ID selects a coordinator shard and a serialized write operation.",
+      "line": 2703,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L2703",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "coordinator-record",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java",
+      "needle": "public CoordinatorResult<OffsetCommitResponseData, CoordinatorRecord> commitOffset(",
+      "claim": "Validated partition offsets produce durable coordinator records.",
+      "line": 620,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L620",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "coordinator-replay",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java",
+      "needle": "OffsetAndMetadata previousValue = offsets.put(",
+      "claim": "Ordinary replay replaces a key with the value from this log record; it is not numeric max(offset).",
+      "line": 1203,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L1203",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "coordinator-hw",
+      "file": "coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java",
+      "needle": "context.deferredEventQueue.completeUpTo(newHighWatermark);",
+      "claim": "Advancing the replicated high watermark releases deferred coordinator operation completions.",
+      "line": 1830,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L1830",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "test-async-no-retry",
+      "file": "clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java",
+      "needle": "public void testOffsetCommitRequestErroredRequestsNotRetriedForAsyncCommit",
+      "claim": "Inspected test asserts no resend after a failed explicit async commit attempt.",
+      "line": 986,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java#L986",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "test-sync-retry",
+      "file": "clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java",
+      "needle": "public void testCommitSyncRetriedAfterExpectedRetriableException",
+      "claim": "Inspected parameterized test covers sync retry classification.",
+      "line": 419,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java#L419",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "Kafka",
+      "id": "test-async-drain",
+      "file": "clients/src/test/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumerTest.java",
+      "needle": "public void testCommitSyncAwaitsCommitAsyncCompletionWithEmptyOffsets",
+      "claim": "Inspected test covers pending async completion wait and timeout even for an empty sync map.",
+      "line": 708,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumerTest.java#L708",
+      "revision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-emitter",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java",
+      "needle": "splitState.setCurrentOffset(consumerRecord.offset() + 1);",
+      "claim": "Flink tracks the next offset after successful deserialization/emission into the source output.",
+      "line": 54,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java#L54",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-snapshot",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java",
+      "needle": "public List<KafkaPartitionSplit> snapshotState",
+      "claim": "Split offsets remain checkpoint state even when Kafka offset committing is disabled.",
+      "line": 98,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L98",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-notify",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java",
+      "needle": "public void notifyCheckpointComplete",
+      "claim": "A completed checkpoint selects its saved offset map, not the latest prefetched position.",
+      "line": 126,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L126",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-commit-failure",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java",
+      "needle": "kafkaSourceReaderMetrics.recordFailedCommit();",
+      "claim": "Commit failure logs and records a metric; success prunes pending bookkeeping.",
+      "line": 152,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L152",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-fetcher",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java",
+      "needle": "private void enqueueOffsetsCommitTask",
+      "claim": "Commit work is enqueued onto the split fetcher owning the Kafka consumer.",
+      "line": 93,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java#L93",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-client",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java",
+      "needle": "ensureConsumer().commitAsync(offsetsToCommit, offsetCommitCallback);",
+      "claim": "The modern KafkaSource uses the Kafka consumer async commit API.",
+      "line": 341,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L341",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-seek",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java",
+      "needle": "consumer.assign(newPartitionAssignments);",
+      "claim": "Flink assigns splits explicitly and seeks to their starting offsets.",
+      "line": 262,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L262",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-defaults",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceBuilder.java",
+      "needle": "if (!props.containsKey(ConsumerConfig.GROUP_ID_CONFIG))",
+      "claim": "Missing group.id defaults checkpoint-offset commits off; auto commit defaults false rather than being universally forced off.",
+      "line": 479,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceBuilder.java#L479",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-options",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceOptions.java",
+      "needle": "public static final ConfigOption<Boolean> COMMIT_OFFSETS_ON_CHECKPOINT",
+      "claim": "Checkpoint-offset committing defaults true, subject to builder configuration and a group ID.",
+      "line": 55,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceOptions.java#L55",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "flink-sink",
+      "file": "flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java",
+      "needle": "producer.commitTransaction();",
+      "claim": "Exactly-once sink finalization commits a producer transaction, not a consumer offset.",
+      "line": 103,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java#L103",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "test-flink-complete",
+      "file": "flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java",
+      "needle": "void testOffsetCommitOnCheckpointComplete()",
+      "claim": "Inspected test verifies Kafka group offsets after checkpoint-completion notification.",
+      "line": 219,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L219",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "flink-connector-kafka",
+      "id": "test-flink-disable",
+      "file": "flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java",
+      "needle": "void testDisableOffsetCommit()",
+      "claim": "Inspected test verifies disabled commit bookkeeping while the source still snapshots.",
+      "line": 284,
+      "url": "https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L284",
+      "revision": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-config",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala",
+      "needle": "val otherUnsupportedConfigs = Seq(",
+      "claim": "Structured Streaming rejects user-specified enable.auto.commit and sets it false on internal consumers.",
+      "line": 334,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L334",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-noop",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala",
+      "needle": "override def commit(end: Offset): Unit = {}",
+      "claim": "The Kafka microbatch source commit callback is a no-op, not KafkaConsumer.commitSync/Async.",
+      "line": 339,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L339",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-fetch",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala",
+      "needle": "def fetch(offset: Long, pollTimeoutMs: Long)",
+      "claim": "Executor consumer seeks and polls at offsets selected by Spark.",
+      "line": 83,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L83",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-start",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "protected def markMicroBatchStart",
+      "claim": "Default synchronous microbatch execution durably logs planned end offsets before running the batch.",
+      "line": 1357,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1357",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-end",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "if (!commitLog.add(execCtx.batchId, metadata))",
+      "claim": "Successful batch completion adds a checkpoint commit-log entry.",
+      "line": 1558,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1558",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-output-order",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "execCtx.sinkCommitProgress = batchSinkProgress",
+      "claim": "Sink execution completes before markMicroBatchEnd in the ordinary microbatch path.",
+      "line": 1346,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1346",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-recovery",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "protected def populateStartOffsets",
+      "claim": "Recovery compares checkpoint offset and commit logs to choose replay versus next batch.",
+      "line": 808,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L808",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-source-commit",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala",
+      "needle": "protected def commitSources",
+      "claim": "Engine source.commit is a generic lifecycle callback; Kafka implements it as no-op.",
+      "line": 1086,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1086",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-sink",
+      "file": "connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala",
+      "needle": "def commit(): WriterCommitMessage",
+      "claim": "Kafka writer commit flushes producer sends and checks errors; it does not couple input group offsets into a Kafka transaction.",
+      "line": 58,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala#L58",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "spark-doc",
+      "file": "docs/streaming/structured-streaming-kafka-integration.md",
+      "needle": "Kafka source doesn't commit any offset.",
+      "claim": "Version-pinned integration documentation explicitly states that Kafka source offsets are not committed.",
+      "line": 1046,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/docs/streaming/structured-streaming-kafka-integration.md#L1046",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "dstream-queue",
+      "file": "connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala",
+      "needle": "def commitAsync(offsetRanges: Array[OffsetRange], callback: OffsetCommitCallback)",
+      "claim": "Legacy DStreams enqueue ranges and keep the most recent callback.",
+      "line": 292,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L292",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "dstream-drain",
+      "file": "connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala",
+      "needle": "protected def commitAll(): Unit",
+      "claim": "A later compute drains queued ranges, takes maximum untilOffset per partition, then calls Kafka commitAsync.",
+      "line": 297,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L297",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "dstream-compute",
+      "file": "connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala",
+      "needle": "currentOffsets = untilOffsets",
+      "claim": "DirectKafkaInputDStream.compute triggers commitAll on the driver.",
+      "line": 255,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L255",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "test-dstream",
+      "file": "connector/kafka-0-10/src/test/scala/org/apache/spark/streaming/kafka010/DirectKafkaStreamSuite.scala",
+      "needle": "test(\"offset recovery from kafka\")",
+      "claim": "Inspected integration test stores outputs before enqueueing commits and verifies restart offsets.",
+      "line": 422,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/test/scala/org/apache/spark/streaming/kafka010/DirectKafkaStreamSuite.scala#L422",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "test-spark-config",
+      "file": "connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala",
+      "needle": "testUnsupportedConfig(\"kafka.enable.auto.commit\")",
+      "claim": "Inspected test asserts that the source rejects this Kafka config.",
+      "line": 2412,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala#L2412",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    },
+    {
+      "repo": "spark",
+      "id": "test-spark-log",
+      "file": "sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala",
+      "needle": "test(\"SPARK-38033: SS cannot be started because the commitId and offsetId are inconsistent\")",
+      "claim": "Inspected test fails recovery when the required checkpoint offset-log batch is missing.",
+      "line": 164,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L164",
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+    }
+  ],
+  "rendered": [
+    {
+      "id": "offset-authority",
+      "width": 1015.03515625,
+      "height": 468.32244873046875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-frontier",
+      "width": 630.59375,
+      "height": 1126.696044921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-sync-async",
+      "width": 823,
+      "height": 1035,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-threads",
+      "width": 1090.03125,
+      "height": 935.2900390625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-rpc",
+      "width": 1087,
+      "height": 925,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-stale-retry",
+      "width": 565,
+      "height": 731,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-flink",
+      "width": 1384,
+      "height": 1149,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-spark",
+      "width": 1370,
+      "height": 831,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "offset-dstream",
+      "width": 399.3125,
+      "height": 1384.25732421875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    }
+  ],
+  "diagramGeometryPassed": true,
+  "artifactChecks": {
+    "pages": [
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      }
+    ],
+    "errors": [],
+    "interactions": [
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      }
+    ]
+  },
+  "artifactChecksPassed": true,
+  "documentationTests": {
+    "passed": 23,
+    "failed": 0,
+    "command": "node --test scripts/build-site.test.mjs scripts/build-kafka-guide.test.mjs scripts/build-kafka-recovery.test.mjs scripts/build-kafka-offsets.test.mjs"
+  },
+  "staticSite": {
+    "files": 237,
+    "htmlPages": 48,
+    "diagrams": 87,
+    "checkedLinks": 1803,
+    "broken": []
+  },
+  "visualInspection": {
+    "completed": true,
+    "diagrams": [
+      "offset-authority",
+      "offset-frontier",
+      "offset-sync-async",
+      "offset-threads",
+      "offset-rpc",
+      "offset-stale-retry",
+      "offset-flink",
+      "offset-spark",
+      "offset-dstream"
+    ],
+    "desktopAndMobilePages": [
+      "kafka-offset-commits-flink-spark.html"
+    ]
+  }
+}

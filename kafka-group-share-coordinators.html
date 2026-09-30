@@ -1,0 +1,779 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Group and share coordinators: ownership and recovery · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head><body data-page="kafka-group-share-coordinators.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Ownership · durable state · fencing · recovery</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Election, coordinator, marker…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a><a href="spark-distributed-execution.html" data-nav="spark-distributed-execution.html"><span>25</span>Spark: driver, executors and Kafka reads</a><a href="spark-checkpoint-failure-recovery.html" data-nav="spark-checkpoint-failure-recovery.html"><span>26</span>Spark: checkpoints, state and failure recovery</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 22 · source-backed Kafka deep dive</p><h1>Group and share coordinators: ownership and recovery</h1><p class="intro">Follow a coordinator from deterministic routing to shard replay, then separate share-group membership from acquisition locks and durable acknowledgement state.</p><p class="guide-footer-note">Pinned source, not a live cluster inspection. Start with the summary; expand the code at the end.</p><nav class="toc" aria-label="On this page"><a href="#summary">1. Three different questions, three different owners</a><a href="#routing">2. FindCoordinator is discovery—not leader election</a><a href="#group-protocols">3. Classic groups, new consumer groups and share groups</a><a href="#shard-replay">4. Group coordinator failover, down to the runtime</a><a href="#share-lifecycle">5. Share record lifecycle and acknowledgement persistence</a><a href="#share-recovery">6. Source-leader failure versus share-coordinator failure</a><a href="#transactional-share">7. Ordinary share ACK is not transactional share EOS</a><a href="#mental">8. Presentation mental model</a><a href="#evidence">Source evidence, scope and validation gaps</a></nav></div><section id="summary"><h2>1. Three different questions, three different owners</h2>
+ <div class="table-scroll"><table><thead><tr><th>Question</th><th>Owner</th><th>Durable source</th></tr></thead><tbody><tr><td>Who is a member and which partitions may it read?</td><td>Group coordinator, including share-group membership.</td><td>__consumer_offsets group metadata; protocol-specific member/assignment records.</td></tr><tr><td>Which share records are temporarily acquired by a consumer?</td><td>Source partition leader’s SharePartition cache and timers.</td><td>A live delivery lease is not the same thing as a durable consumer offset.</td></tr><tr><td>Which share records/ranges are acknowledged, available or terminal?</td><td>Share coordinator for the group/topic-ID/partition key.</td><td>__share_group_state records, snapshots/updates and start-offset state.</td></tr></tbody></table></div>
+ <figure class="diagram" id="recovery-share-planes"><figcaption><h3>Share groups have three owners</h3><p>Membership, record delivery and durable delivery state are deliberately separate. B1, B2 and B3 can be the same process or different brokers.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-share-planes.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-share-planes.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Share groups have three owners"><img src="diagrams/recovery-share-planes.svg" alt="Share groups have three owners. Membership, record delivery and durable delivery state are deliberately separate. B1, B2 and B3 can be the same process or different brokers." loading="lazy"></div></figure>
+ <p>The word “share coordinator” does not replace “group coordinator.” A share consumer uses membership RPCs with the group owner and record-delivery RPCs with source leaders; those leaders persist delivery state through the share coordinator. This extra separation enables concurrent record sharing without a single monotonically committed consumer offset representing every delivery.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-group-share">group-share</a> <a class="cite" href="#ev-share-route">share-route</a> <a class="cite" href="#ev-share-cache">share-cache</a> <a class="cite" href="#ev-share-persist">share-persist</a></div></section>
+<section id="routing"><h2>2. FindCoordinator is discovery—not leader election</h2>
+ <pre class="guide-pre"><code>groupShard = Utils.abs(groupId.hashCode()) % offsetsTopicPartitionCount
+txnShard   = Utils.abs(transactionalId.hashCode()) % txnTopicPartitionCount
+shareKey   = canonical(groupId, topicId, sourcePartition)
+shareShard = Utils.abs(shareKey.hashCode()) % shareStateTopicPartitionCount
+
+owner = current leader of the selected internal-topic partition</code></pre>
+ <p>The pinned FindCoordinator schema distinguishes group, transaction and share keys. Share routing uses the canonical <code>groupId:topicId:partition</code> form; a topic name is not interchangeable with its UUID. A single group can have share-state keys spread across many state shards. Internal-topic partition counts are part of this mapping—not a casually adjustable load-balancing knob.</p>
+ <div class="table-scroll"><table><thead><tr><th>Example operation</th><th>Where it goes</th><th>Where it does not go</th></tr></thead><tbody><tr><td>ConsumerGroupHeartbeat or classic JoinGroup/SyncGroup</td><td>Group coordinator for group ID.</td><td>Not the leader of every source partition; not a controller voter.</td></tr><tr><td>OffsetCommit / OffsetFetch</td><td>Group coordinator.</td><td>Not necessarily the broker storing the corresponding source records.</td></tr><tr><td>ShareGroupHeartbeat</td><td>Group coordinator.</td><td>Not the share coordinator.</td></tr><tr><td>ShareFetch / ShareAcknowledge</td><td>Relevant source partition leaders, using share sessions and acquired ranges.</td><td>Not a single group coordinator acting as a records proxy.</td></tr><tr><td>ReadShareGroupState / WriteShareGroupState</td><td>Share coordinator selected by the share-partition key.</td><td>Not the KRaft metadata log.</td></tr><tr><td>EndTxn</td><td>Transaction coordinator.</td><td>Not the group coordinator, except that group offsets can later be a transaction participant.</td></tr></tbody></table></div>
+ <p>A stale coordinator response means refresh/retry, not “elect a coordinator yourself.” The controller elects the internal partition leader; discovery reports that owner. During transitions the new owner may still be loading, and a network timeout does not prove that a preceding write failed.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-group-route">group-route</a> <a class="cite" href="#ev-txn-route">txn-route</a> <a class="cite" href="#ev-share-route">share-route</a> <a class="cite" href="#ev-group-share">group-share</a> <a class="cite" href="#ev-find-schema">find-schema</a></div></section>
+<section id="group-protocols"><h2>3. Classic groups, new consumer groups and share groups</h2>
+ <div class="table-scroll"><table><thead><tr><th>Protocol</th><th>Assignment and ownership</th><th>Failure implications</th></tr></thead><tbody><tr><td>Classic consumer group</td><td>JoinGroup selects a consumer member as group leader; that client computes assignment and sends SyncGroup through the broker coordinator.</td><td>The consumer group leader is not the partition leader or controller. Membership loss/rebalance uses generations, member IDs and timers.</td></tr><tr><td>New consumer protocol</td><td>ConsumerGroupHeartbeat; server-side assignment and member/group epochs with reconciliation.</td><td>Coordinator restores persisted state; members reconcile assignments and may be fenced/rejoin according to epoch state.</td></tr><tr><td>Share group</td><td>ShareGroupHeartbeat for membership/assignment; multiple members can receive distinct acquired records from a shared partition.</td><td>Membership expiry and record acquisition-lock expiry are different timers and different reasons for reassignment/redelivery.</td></tr><tr><td>Standard Flink KafkaSource</td><td>Flink enumerator assigns splits; the Kafka client uses explicit assign/seek.</td><td>Kafka group rebalance is not how Flink reassigns source subtasks. Checkpoint source offsets remain Flink recovery truth.</td></tr></tbody></table></div>
+ <p>Do not tell the audience that every coordinator move necessarily triggers a complete stop-the-world rebalance. The source replays persisted group state and reconstructs timers. Subsequent client heartbeats, expired sessions, lost in-flight join/sync work, protocol version and membership changes determine what reconciliation is needed.</p>
+ <details class="qa"><summary>Does a committed group offset prove my sink committed?</summary><p>No. An ordinary OffsetCommit stores progress; it cannot make an external database insert atomic. Kafka consume-transform-produce can enroll offsets in a producer transaction using the transaction APIs. Standard Flink KafkaSource → KafkaSink instead uses a completed Flink checkpoint and recoverable sink transaction; its optional source OffsetCommit is separate bookkeeping. See <a href="kafka-flink-distributed-runtime.html#checkpoint">the checkpoint boundary</a>.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-group-members">group-members</a> <a class="cite" href="#ev-group-share">group-share</a> <a class="cite" href="#ev-offset-marker">offset-marker</a></div></section>
+<section id="shard-replay"><h2>4. Group coordinator failover, down to the runtime</h2>
+ <figure class="diagram" id="recovery-group-recovery"><figcaption><h3>Group coordinator = a recoverable shard</h3><p>No separate election per group. The controller elects the backing partition leader; that broker loads all groups mapped to the shard.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-group-recovery.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-group-recovery.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Group coordinator = a recoverable shard"><img src="diagrams/recovery-group-recovery.svg" alt="Group coordinator = a recoverable shard. No separate election per group. The controller elects the backing partition leader; that broker loads all groups mapped to the shard." loading="lazy"></div></figure>
+ <ol><li>BrokerMetadataPublisher observes the changed leader of an <code>__consumer_offsets</code> partition and calls <code>GroupCoordinatorService.onElection(partition, leaderEpoch)</code>.</li><li><code>CoordinatorRuntime.scheduleLoadOperation</code> creates/loads a shard. The coordinator loader replays records, including relevant transaction control records, into state managers. LOADING is not ACTIVE.</li><li>On successful load, the runtime registers high-watermark notifications and calls the shard’s loaded hook. GroupMetadataManager reconstructs membership/session and pending reconciliation timers according to group type.</li><li>Requests become keyed runtime events. State-changing results produce records; the writer appends them, and deferred responses wait for the required committed boundary. In-memory replay/speculation is not itself replication.</li><li>When ownership is lost, unload cancels/releases outstanding work. Epoch checks prevent stale load/completion work from being treated as the current shard. A new owner rebuilds from the log rather than receiving the old JVM heap.</li></ol>
+ <p>There are several notions of “snapshot”: the runtime’s timeline snapshots support committed reads/rollback, share-state snapshot records summarize state, and KRaft file snapshots compact metadata replay. They are not one global snapshot service.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-broker-publisher">broker-publisher</a> <a class="cite" href="#ev-group-load">group-load</a> <a class="cite" href="#ev-runtime-load">runtime-load</a> <a class="cite" href="#ev-runtime-hw">runtime-hw</a> <a class="cite" href="#ev-runtime-threads">runtime-threads</a> <a class="cite" href="#ev-group-members">group-members</a> <a class="cite" href="#ev-test-runtime">test-runtime</a></div></section>
+<section id="share-lifecycle"><h2>5. Share record lifecycle and acknowledgement persistence</h2>
+ <figure class="diagram" id="recovery-share-ack"><figcaption><h3>An acknowledgement crosses a durability boundary</h3><p>Ordinary ACCEPT shown. A successful local application side effect is not atomically coupled to this acknowledgement. Share state persistence uses broker replication, not controller-quorum replication.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-share-ack.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-share-ack.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: An acknowledgement crosses a durability boundary"><img src="diagrams/recovery-share-ack.svg" alt="An acknowledgement crosses a durability boundary. Ordinary ACCEPT shown. A successful local application side effect is not atomically coupled to this acknowledgement. Share state persistence uses broker replication, not controller-quorum replication." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Event</th><th>Logical transition / effect</th><th>Durability and retry meaning</th></tr></thead><tbody><tr><td>Fetch acquisition</td><td>AVAILABLE → ACQUIRED; member identity, delivery count and acquisition timer live in source-leader state.</td><td>Do not assume every lease acquisition synchronously writes a durable state record. In-flight deliveries can be redelivered after failure.</td></tr><tr><td>ACCEPT</td><td>ACQUIRED → ACKNOWLEDGED through acknowledgement validation and persistence.</td><td>The write must finish before treating the acknowledgement as successful. External side effects are separate.</td></tr><tr><td>RELEASE</td><td>ACQUIRED → AVAILABLE subject to delivery/terminal-state rules.</td><td>Another delivery can occur; this is intentional retry, not a transaction abort.</td></tr><tr><td>REJECT / delivery limit</td><td>Terminal/discard or configured DLQ processing according to feature/configuration.</td><td>This checkout includes ARCHIVING → ARCHIVED for DLQ recovery; do not reuse older numeric state IDs blindly.</td></tr><tr><td>RENEW, when supported/enabled</td><td>Extend an acquisition lock without completing the record.</td><td>Not an offset commit and not a transaction; configuration/version gates apply.</td></tr><tr><td>Acquisition lock expiry</td><td>Release or terminal handling based on state, start offset and delivery limits.</td><td>A slow consumer can lose ownership even if its business action eventually succeeds. A late ack is not universally valid.</td></tr></tbody></table></div>
+ <p><code>SharePartition.rollbackOrProcessStateUpdates</code> holds provisional changes while the persister writes state. A failure rolls them back, accounting for concurrent timeout/state changes; success finalizes them. The persister carries source leader epoch and state epoch with each batch. A successful state record belongs in <code>__share_group_state</code>, not the user topic.</p>
+ <p>The state topic’s configuration in this checkout uses delete policy with coordinator-managed pruning and snapshot/update records. It is incorrect to say “all Kafka internal state topics are compacted in the same way.” Share acquisition memory, state snapshots, and group membership each need their own recovery explanation.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-share-cache">share-cache</a> <a class="cite" href="#ev-share-ack">share-ack</a> <a class="cite" href="#ev-share-persist">share-persist</a> <a class="cite" href="#ev-share-states">share-states</a> <a class="cite" href="#ev-share-write">share-write</a> <a class="cite" href="#ev-share-storage">share-storage</a> <a class="cite" href="#ev-test-share-rollback">test-share-rollback</a></div></section>
+<section id="share-recovery"><h2>6. Source-leader failure versus share-coordinator failure</h2>
+ <figure class="diagram" id="recovery-share-failure"><figcaption><h3>Recover the state owner that actually failed</h3><p>Do not conflate a crashed consumer, a source-partition leader and the share-state coordinator.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-share-failure.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-share-failure.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Recover the state owner that actually failed"><img src="diagrams/recovery-share-failure.svg" alt="Recover the state owner that actually failed. Do not conflate a crashed consumer, a source-partition leader and the share-state coordinator." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Failure window</th><th>Recovery</th><th>Remaining ambiguity / limit</th></tr></thead><tbody><tr><td>Consumer crashes after business action, before ACCEPT</td><td>Acquisition is eventually released/expired; another consumer can receive it.</td><td>The action may execute twice. Use idempotency keys, deduplication or an explicit transactional integration.</td></tr><tr><td>ACCEPT response lost</td><td>The state write may have succeeded; inspect/retry using supported client semantics.</td><td>Do not promise every duplicate ack returns success: current ownership/state can reject it.</td></tr><tr><td>Source leader dies with acquired records</td><td>New source leader initializes SharePartition from persisted state, using its newer source leader epoch.</td><td>Volatile member locks/timers are not transferred as a live JVM object. Unfinished delivery can repeat.</td></tr><tr><td>Old source leader sends a delayed state write</td><td>Share coordinator compares source leader epoch with its recorded highest epoch.</td><td>Fencing becomes effective once newer authority is recorded/observed; it is not instantaneous global knowledge.</td></tr><tr><td>Share coordinator dies</td><td>The __share_group_state shard changes leader and is replayed by the replacement coordinator. Persister rediscovers/retries.</td><td>State persistence is unavailable while ownership/loading/replication are unresolved, even if source records are readable.</td></tr><tr><td>Group coordinator dies</td><td>Reload __consumer_offsets membership and assignment state; clients retry membership operations.</td><td>This does not itself delete durable share acknowledgement state or elect every source leader.</td></tr><tr><td>State write fails</td><td>Provisional acknowledgement transitions roll back or follow the exception path.</td><td>A lock may expire concurrently. “Retry any ack forever” is not a safe universal rule.</td></tr><tr><td>Share state reinitialized/reset</td><td>State epoch prevents an earlier incarnation’s writes from overwriting newer state.</td><td>Operational reset changes processing semantics; it is not transparent repair.</td></tr><tr><td>Retention/compaction removed a source record</td><td>Delivery code handles gaps/start-offset movement under its rules.</td><td>A delivery-state log cannot reproduce deleted payload bytes.</td></tr><tr><td>Source and state leaders fail together</td><td>Both partition leadership/replay paths must recover; they can complete in either order.</td><td>Availability depends on surviving replicas of both logs plus metadata quorum progress.</td></tr></tbody></table></div>
+ <p>A subtle but important path is <code>readStateAndMaybeUpdateLeaderEpoch</code>: a new source leader’s read can itself generate a state record to advance the fencing epoch. The read is therefore not always just a cache lookup. Tests explicitly reject lower source leader epochs and lower state epochs without generating write records.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-share-init">share-init</a> <a class="cite" href="#ev-share-read">share-read</a> <a class="cite" href="#ev-share-epochs">share-epochs</a> <a class="cite" href="#ev-share-ack">share-ack</a> <a class="cite" href="#ev-test-share-fence">test-share-fence</a> <a class="cite" href="#ev-test-share-state">test-share-state</a></div></section>
+<section id="transactional-share"><h2>7. Ordinary share ACK is not transactional share EOS</h2>
+ <p><strong>Scope boundary:</strong> the pinned Kafka snapshot used by this guide has no <code>TxnShareAcknowledgeRequest.json</code> and no <code>TX_PENDING</code> state. This chapter describes its ordinary share-delivery path. The separate KIP-1289 development design must not be silently drawn into these diagrams.</p>
+ <p>The architectural problem is easy to see: output committed but input ACCEPT lost can duplicate processing; input ACCEPT committed but output failed can lose the intended result. Ordinary acknowledgement RPCs alone do not atomically join the two. A transactional-share implementation needs explicit enrollment/staging, durable participant state, fencing and commit/abort completion. Such an implementation must be verified against its own branch and feature gates before claiming end-to-end EOS.</p>
+ <p>Likewise, the normal Flink KafkaSource is not a share consumer. Do not generalize its checkpointed next-offset model into share record-ack state. This guide keeps the two protocols separate.</p><div class="refs">Source: <a class="cite" href="#ev-share-states">share-states</a> <a class="cite" href="#ev-marker-handler">marker-handler</a></div></section>
+<section id="mental"><h2>8. Presentation mental model</h2>
+ <pre class="guide-pre"><code>Group coordinator = membership desk
+Source leader     = record delivery desk + temporary locks
+Share coordinator = durable delivery ledger
+
+Failure question:
+Did we lose a member, a delivery desk, or the ledger owner?
+Which log survives, which epoch fences the old owner,
+and which request must be retried after the new owner loads?</code></pre>
+ <p>Continue with <a href="kafka-transaction-marker-recovery.html">transaction markers and crash windows</a>. For exact field/version gates, use <a href="kafka-rpc-atlas.html#rpc-10">FindCoordinator</a>, <a href="kafka-rpc-atlas.html#rpc-76">ShareGroupHeartbeat</a> and the atlas search for ShareFetch, ShareAcknowledge and WriteShareGroupState.</p></section>
+<section id="evidence"><h2>Source evidence, scope and validation gaps</h2><p>Source baseline: <a href="https://github.com/apache/kafka/tree/d2da6a18f839ce8b2eeb4db8e7515200258b0f81">Kafka d2da6a18f839ce8b2eeb4db8e7515200258b0f81</a>. Facts below were traced from this source snapshot. Test bodies were inspected as evidence; <strong>Kafka engine tests and live fault injection were not run</strong>. The validation report concerns the generated documentation, diagrams and links. Example placements and offsets are illustrative, not an observed deployment.</p><p>This is a modern KRaft/source-snapshot guide, not a guarantee for every Kafka release or feature level. It covers ordinary producer transactions and share acknowledgements, not the separate transactional-share development branch or every distributed-transaction API extension. Apache source excerpts are under the <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p><details class="code" id="ev-broker-publisher"><summary>broker-publisher · BrokerMetadataPublisher.scala:112</summary><p>A broker updates its metadata cache, replica roles, and each internal-topic coordinator from metadata deltas.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala#L112">core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala</a></p><pre class="guide-pre"><code>112    override def onMetadataUpdate(
+113      delta: MetadataDelta,
+114      newImage: MetadataImage,
+115      manifest: LoaderManifest
+116    ): Unit = {
+117      val highestOffsetAndEpoch = newImage.highestOffsetAndEpoch()
+118
+119      val deltaName = if (_firstPublish) {
+120        s&quot;initial MetadataDelta up to ${highestOffsetAndEpoch.offset}&quot;
+121      } else {
+122        s&quot;MetadataDelta up to ${highestOffsetAndEpoch.offset}&quot;
+123      }
+124      try {
+125        if (isTraceEnabled) {
+126          trace(s&quot;Publishing delta $delta with highest offset $highestOffsetAndEpoch&quot;)
+127        }
+128
+129        // Publish the new metadata image to the metadata cache.
+130        metadataCache.setImage(newImage)
+131
+132        def metadataVersionLogMsg = s&quot;metadata.version ${newImage.features().metadataVersion()}&quot;
+133
+134        if (_firstPublish) {
+135          info(s&quot;Publishing initial metadata at offset $highestOffsetAndEpoch with $metadataVersionLogMsg.&quot;)
+136
+137          // If this is the first metadata update we are applying, initialize the managers
+138          // first (but after setting up the metadata cache).
+139          initializeManagers(newImage)</code></pre></details>
+<details class="code" id="ev-group-route"><summary>group-route · GroupCoordinatorService.java:459</summary><p>Group ID hashes to __consumer_offsets; its leader owns the group shard.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L459">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java</a></p><pre class="guide-pre"><code>459      public int partitionFor(
+460          String groupId
+461      ) {
+462          throwIfNotActive();
+463          return Utils.abs(groupId.hashCode()) % numPartitions;
+464      }
+465
+466      /**
+467       * Validates the request.
+468       *
+469       * @param request The request to validate.
+470       * @param apiVersion The version of ConsumerGroupHeartbeat RPC
+471       * @throws InvalidRequestException if the request is not valid.
+472       * @throws UnsupportedAssignorException if the assignor is not supported.
+473       */
+474      private void throwIfConsumerGroupHeartbeatRequestIsInvalid(
+475          ConsumerGroupHeartbeatRequestData request,
+476          int apiVersion
+477      ) throws InvalidRequestException, UnsupportedAssignorException {
+478          if (apiVersion &gt;= CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION ||
+479              request.memberEpoch() &gt; 0 ||
+480              request.memberEpoch() == LEAVE_GROUP_MEMBER_EPOCH
+481          ) {
+482              throwIfEmptyString(request.memberId(), &quot;MemberId can't be empty.&quot;);
+483          }
+484
+485          throwIfEmptyString(request.groupId(), &quot;GroupId can't be empty.&quot;);
+486          throwIfEmptyString(request.instanceId(), &quot;InstanceId can't be empty.&quot;);</code></pre></details>
+<details class="code" id="ev-group-load"><summary>group-load · GroupCoordinatorService.java:2847</summary><p>Internal-topic election schedules coordinator shard loading with the partition leader epoch.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L2847">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java</a></p><pre class="guide-pre"><code>2847      public void onElection(
+2848          int groupMetadataPartitionIndex,
+2849          int groupMetadataPartitionLeaderEpoch
+2850      ) {
+2851          throwIfNotActive();
+2852          runtime.scheduleLoadOperation(
+2853              new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, groupMetadataPartitionIndex),
+2854              groupMetadataPartitionLeaderEpoch
+2855          );
+2856      }
+2857
+2858      /**
+2859       * See {@link GroupCoordinator#onResignation(int, OptionalInt)}.
+2860       */
+2861      @Override
+2862      public void onResignation(
+2863          int groupMetadataPartitionIndex,
+2864          OptionalInt groupMetadataPartitionLeaderEpoch
+2865      ) {
+2866          throwIfNotActive();
+2867          runtime.scheduleUnloadOperation(
+2868              new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, groupMetadataPartitionIndex),
+2869              groupMetadataPartitionLeaderEpoch
+2870          );
+2871      }
+2872
+2873      /**
+2874       * See {@link GroupCoordinator#onMetadataUpdate(MetadataDelta, MetadataImage)}.</code></pre></details>
+<details class="code" id="ev-group-members"><summary>group-members · GroupMetadataManager.java:6631</summary><p>Loaded classic, consumer, share and Streams groups reconstruct timers according to their protocol.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupMetadataManager.java#L6631">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupMetadataManager.java</a></p><pre class="guide-pre"><code>6631      public void onLoaded() {
+6632          Map&lt;ClassicGroupState, Long&gt; classicGroupSizeCounter = new HashMap&lt;&gt;();
+6633          groups.forEach((groupId, group) -&gt; {
+6634              switch (group.type()) {
+6635                  case STREAMS:
+6636                      StreamsGroup streamsGroup = (StreamsGroup) group;
+6637                      log.info(&quot;Loaded streams group {} with {} members.&quot;, groupId, streamsGroup.members().size());
+6638                      streamsGroup.members().forEach((memberId, member) -&gt; {
+6639                          log.debug(&quot;Loaded member {} in streams group {}.&quot;, memberId, groupId);
+6640                          scheduleStreamsGroupSessionTimeout(groupId, memberId);
+6641                          if (member.state() == org.apache.kafka.coordinator.group.streams.MemberState.UNREVOKED_TASKS) {
+6642                              scheduleStreamsGroupRebalanceTimeout(
+6643                                  groupId,
+6644                                  member.memberId(),
+6645                                  member.memberEpoch(),
+6646                                  member.rebalanceTimeoutMs()
+6647                              );
+6648                          }
+6649                      });
+6650                      break;
+6651
+6652                  case CONSUMER:
+6653                      ConsumerGroup consumerGroup = (ConsumerGroup) group;
+6654                      log.info(&quot;Loaded consumer group {} with {} members.&quot;, groupId, consumerGroup.members().size());
+6655                      consumerGroup.members().forEach((memberId, member) -&gt; {
+6656                          log.debug(&quot;Loaded member {} in consumer group {}.&quot;, memberId, groupId);
+6657                          scheduleConsumerGroupSessionTimeout(groupId, memberId);
+6658                          if (member.state() == MemberState.UNREVOKED_PARTITIONS) {</code></pre></details>
+<details class="code" id="ev-group-share"><summary>group-share · GroupCoordinatorService.java:1039</summary><p>Share-group membership heartbeat belongs to the group coordinator, not the share-state coordinator.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L1039">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java</a></p><pre class="guide-pre"><code>1039      public CompletableFuture&lt;ShareGroupHeartbeatResponseData&gt; shareGroupHeartbeat(
+1040          AuthorizableRequestContext context,
+1041          ShareGroupHeartbeatRequestData request
+1042      ) {
+1043          if (!isActive.get()) {
+1044              return CompletableFuture.completedFuture(new ShareGroupHeartbeatResponseData()
+1045                  .setErrorCode(Errors.COORDINATOR_NOT_AVAILABLE.code())
+1046              );
+1047          }
+1048
+1049          try {
+1050              throwIfShareGroupHeartbeatRequestIsInvalid(request);
+1051          } catch (Throwable ex) {
+1052              ApiError apiError = ApiError.fromThrowable(ex);
+1053              return CompletableFuture.completedFuture(new ShareGroupHeartbeatResponseData()
+1054                  .setErrorCode(apiError.error().code())
+1055                  .setErrorMessage(apiError.message())
+1056              );
+1057          }
+1058
+1059          return runtime.scheduleWriteOperation(
+1060              &quot;share-group-heartbeat&quot;,
+1061              topicPartitionFor(request.groupId()),
+1062              coordinator -&gt; coordinator.shareGroupHeartbeat(context, request)
+1063          ).thenCompose(result -&gt; {
+1064              if (result.getValue().isPresent()) {
+1065                  // Adding to timer makes this call async with respect to the heartbeat.
+1066                  timer.add(new TimerTask(0L) {</code></pre></details>
+<details class="code" id="ev-runtime-load"><summary>runtime-load · CoordinatorRuntime.java:578</summary><p>Shard replay is asynchronous; active state follows successful load.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L578">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java</a></p><pre class="guide-pre"><code>578          private void load() {
+579              if (state != CoordinatorState.LOADING) {
+580                  throw new IllegalStateException(&quot;Coordinator must be in loading state&quot;);
+581              }
+582
+583              loader.load(tp, coordinator).whenComplete((summary, exception) -&gt; {
+584                  scheduleInternalOperation(&quot;CompleteLoad(tp=&quot; + tp + &quot;, epoch=&quot; + epoch + &quot;)&quot;, tp, () -&gt; {
+585                      CoordinatorContext context = coordinators.get(tp);
+586                      if (context != null) {
+587                          if (context.state != CoordinatorState.LOADING) {
+588                              log.info(&quot;Ignored load completion from {} because context is in {} state.&quot;,
+589                                  context.tp, context.state);
+590                              return;
+591                          }
+592                          try {
+593                              if (exception != null) throw exception;
+594                              context.transitionTo(CoordinatorState.ACTIVE);
+595                              if (summary != null) {
+596                                  runtimeMetrics.recordPartitionLoadSensor(summary.startTimeMs(), summary.endTimeMs());
+597                                  log.info(&quot;Finished loading of metadata from {} with epoch {} in {}ms where {}ms &quot; +
+598                                          &quot;was spent in the scheduler. Loaded {} records which total to {} bytes.&quot;,
+599                                      tp, epoch, summary.endTimeMs() - summary.startTimeMs(),
+600                                      summary.schedulerQueueTimeMs(), summary.numRecords(), summary.numBytes());
+601                              }
+602                          } catch (Throwable ex) {
+603                              log.error(&quot;Failed to load metadata from {} with epoch {} due to {}.&quot;,
+604                                  tp, epoch, ex.getMessage(), ex);
+605                              context.transitionTo(CoordinatorState.FAILED);</code></pre></details>
+<details class="code" id="ev-runtime-hw"><summary>runtime-hw · CoordinatorRuntime.java:1784</summary><p>Replication high-watermark callbacks advance committed views and release deferred responses.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L1784">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java</a></p><pre class="guide-pre"><code>1784      class HighWatermarkListener implements PartitionWriter.Listener {
+1785
+1786          static final long NO_OFFSET = -1L;
+1787
+1788          /**
+1789           * The atomic long is used to store the last and unprocessed high watermark
+1790           * received from the partition. The atomic value is replaced by -1L when
+1791           * the high watermark is taken to update the context.
+1792           */
+1793          private final AtomicLong lastHighWatermark = new AtomicLong(NO_OFFSET);
+1794
+1795          /**
+1796           * @return The last high watermark received or NO_OFFSET if none is pending.
+1797           */
+1798          public long lastHighWatermark() {
+1799              return lastHighWatermark.get();
+1800          }
+1801
+1802          /**
+1803           * Updates the high watermark of the corresponding coordinator.
+1804           *
+1805           * @param tp        The topic partition.
+1806           * @param offset    The new high watermark.
+1807           */
+1808          @Override
+1809          public void onHighWatermarkUpdated(
+1810              TopicPartition tp,
+1811              long offset</code></pre></details>
+<details class="code" id="ev-runtime-threads"><summary>runtime-threads · MultiThreadedEventProcessor.java:36</summary><p>A keyed event processor supports many shards; not one dedicated thread/pod per group.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java#L36">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java</a></p><pre class="guide-pre"><code>36  public final class MultiThreadedEventProcessor implements CoordinatorEventProcessor {
+37
+38      /**
+39       * The poll timeout to wait for an event by the EventProcessorThread.
+40       */
+41      private static final long POLL_TIMEOUT_MS = 300L;
+42
+43      /**
+44       * The logger.
+45       */
+46      private final Logger log;
+47
+48      /**
+49       * The accumulator.
+50       */
+51      private final EventAccumulator&lt;TopicPartition, CoordinatorEvent&gt; accumulator;
+52
+53      /**
+54       * The processing threads.
+55       */
+56      private final List&lt;EventProcessorThread&gt; threads;
+57
+58      /**
+59       * A boolean indicated whether the event processor is shutting down.
+60       */
+61      private volatile boolean shuttingDown;
+62
+63      /**</code></pre></details>
+<details class="code" id="ev-offset-marker"><summary>offset-marker · OffsetMetadataManager.java:1251</summary><p>Commit materializes pending transactional offsets; abort discards them; no pending offsets makes replay a no-op.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L1251">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java</a></p><pre class="guide-pre"><code>1251      public void replayEndTransactionMarker(
+1252          long producerId,
+1253          TransactionResult result
+1254      ) throws RuntimeException {
+1255          Offsets pendingOffsets = pendingTransactionalOffsets.remove(producerId);
+1256
+1257          if (pendingOffsets == null) {
+1258              log.debug(&quot;Replayed end transaction marker with result {} for producer id {} but &quot; +
+1259                  &quot;no pending offsets are present. Ignoring it.&quot;, result, producerId);
+1260              return;
+1261          }
+1262
+1263          pendingOffsets.offsetsByGroup.forEach((groupId, topicOffsets) -&gt; {
+1264              topicOffsets.forEach((topic, partitionOffsets) -&gt; {
+1265                  partitionOffsets.keySet().forEach(partitionId -&gt; {
+1266                      openTransactions.remove(groupId, topic, partitionId, producerId);
+1267                  });
+1268              });
+1269          });
+1270
+1271          if (result == TransactionResult.COMMIT) {
+1272              log.debug(&quot;Committed transactional offset commits for producer id {}.&quot;, producerId);
+1273
+1274              pendingOffsets.offsetsByGroup.forEach((groupId, topicOffsets) -&gt; {
+1275                  topicOffsets.forEach((topicName, partitionOffsets) -&gt; {
+1276                      partitionOffsets.forEach((partitionId, offsetAndMetadata) -&gt; {
+1277                          OffsetAndMetadata existingOffsetAndMetadata = offsets.get(
+1278                              groupId,</code></pre></details>
+<details class="code" id="ev-share-route"><summary>share-route · ShareCoordinatorService.java:282</summary><p>Share state is routed by the canonical group/topic-ID/partition key, not group ID alone.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java#L282">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java</a></p><pre class="guide-pre"><code>282      public int partitionFor(SharePartitionKey key) {
+283          throwIfNotActive();
+284          // Call to asCoordinatorKey is necessary as we depend only on topicId (Uuid) and
+285          // not topic name. We do not want this calculation to distinguish between 2
+286          // SharePartitionKeys where everything except topic name is the same.
+287          return Utils.abs(key.asCoordinatorKey().hashCode()) % numPartitions;
+288      }
+289
+290      @Override
+291      public Map&lt;String, String&gt; shareGroupStateTopicConfigs() {
+292          // As defined in KIP-932.
+293          return Map.of(
+294              TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_DELETE,
+295              TopicConfig.COMPRESSION_TYPE_CONFIG, BrokerCompressionType.PRODUCER.name,
+296              TopicConfig.SEGMENT_BYTES_CONFIG, String.valueOf(config.shareCoordinatorStateTopicSegmentBytes()),
+297              TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, String.valueOf(config.shareCoordinatorStateTopicMinIsr()),
+298              TopicConfig.RETENTION_MS_CONFIG, &quot;-1&quot;
+299          );
+300      }
+301
+302      /**
+303       * The share coordinator startup method will get invoked from BrokerMetadataPublisher.
+304       * At the time of writing, the publisher uses metadata cache to fetch the number of partitions
+305       * of the share state topic. In case this information is not available, the user provided
+306       * config will be used to fetch the value.
+307       * This is consistent with the group coordinator startup functionality.
+308       *
+309       * @param shareGroupTopicPartitionCount - supplier returning the number of partitions for __share_group_state topic</code></pre></details>
+<details class="code" id="ev-share-storage"><summary>share-storage · ShareCoordinatorService.java:291</summary><p>This checkout uses delete policy and coordinator-managed pruning for share state, not ordinary compact-only assumptions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java#L291">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java</a></p><pre class="guide-pre"><code>291      public Map&lt;String, String&gt; shareGroupStateTopicConfigs() {
+292          // As defined in KIP-932.
+293          return Map.of(
+294              TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_DELETE,
+295              TopicConfig.COMPRESSION_TYPE_CONFIG, BrokerCompressionType.PRODUCER.name,
+296              TopicConfig.SEGMENT_BYTES_CONFIG, String.valueOf(config.shareCoordinatorStateTopicSegmentBytes()),
+297              TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, String.valueOf(config.shareCoordinatorStateTopicMinIsr()),
+298              TopicConfig.RETENTION_MS_CONFIG, &quot;-1&quot;
+299          );
+300      }
+301
+302      /**
+303       * The share coordinator startup method will get invoked from BrokerMetadataPublisher.
+304       * At the time of writing, the publisher uses metadata cache to fetch the number of partitions
+305       * of the share state topic. In case this information is not available, the user provided
+306       * config will be used to fetch the value.
+307       * This is consistent with the group coordinator startup functionality.
+308       *
+309       * @param shareGroupTopicPartitionCount - supplier returning the number of partitions for __share_group_state topic
+310       */
+311      @Override
+312      public void startup(
+313          IntSupplier shareGroupTopicPartitionCount
+314      ) {
+315          if (!isActive.compareAndSet(false, true)) {
+316              log.warn(&quot;Share coordinator is already running.&quot;);
+317              return;
+318          }</code></pre></details>
+<details class="code" id="ev-share-write"><summary>share-write · ShareCoordinatorShard.java:318</summary><p>State writes produce ShareSnapshot/ShareUpdate records for a share-partition key.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L318">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java</a></p><pre class="guide-pre"><code>318      public CoordinatorResult&lt;WriteShareGroupStateResponseData, CoordinatorRecord&gt; writeState(
+319          WriteShareGroupStateRequestData request
+320      ) {
+321          // Records to write (with both key and value of snapshot type), response to caller
+322          // only one key will be there in the request by design.
+323          metricsShard.record(ShareCoordinatorMetrics.SHARE_COORDINATOR_WRITE_SENSOR_NAME);
+324          Optional&lt;CoordinatorResult&lt;WriteShareGroupStateResponseData, CoordinatorRecord&gt;&gt; error = maybeGetWriteStateError(request);
+325          if (error.isPresent()) {
+326              return error.get();
+327          }
+328
+329          WriteShareGroupStateRequestData.WriteStateData topicData = request.topics().get(0);
+330          WriteShareGroupStateRequestData.PartitionData partitionData = topicData.partitions().get(0);
+331          SharePartitionKey key = SharePartitionKey.getInstance(request.groupId(), topicData.topicId(), partitionData.partition());
+332
+333          CoordinatorRecord record = generateShareStateRecord(partitionData, key, false);
+334          // build successful response if record is correctly created
+335          WriteShareGroupStateResponseData responseData = new WriteShareGroupStateResponseData().setResults(
+336              List.of(WriteShareGroupStateResponse.toResponseWriteStateResult(key.topicId(),
+337                  List.of(WriteShareGroupStateResponse.toResponsePartitionResult(
+338                      key.partition()))
+339              ))
+340          );
+341
+342          return new CoordinatorResult&lt;&gt;(List.of(record), responseData);
+343      }
+344
+345      /**</code></pre></details>
+<details class="code" id="ev-share-read"><summary>share-read · ShareCoordinatorShard.java:354</summary><p>Reading state from a newer source leader can persist its epoch to fence old writers.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L354">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java</a></p><pre class="guide-pre"><code>354      public CoordinatorResult&lt;ReadShareGroupStateResponseData, CoordinatorRecord&gt; readStateAndMaybeUpdateLeaderEpoch(
+355          ReadShareGroupStateRequestData request
+356      ) {
+357          // Only one key will be there in the request by design.
+358          Optional&lt;ReadShareGroupStateResponseData&gt; error = maybeGetReadStateError(request);
+359          if (error.isPresent()) {
+360              return new CoordinatorResult&lt;&gt;(List.of(), error.get());
+361          }
+362
+363          ReadShareGroupStateRequestData.ReadStateData topicData = request.topics().get(0);
+364          ReadShareGroupStateRequestData.PartitionData partitionData = topicData.partitions().get(0);
+365
+366          Uuid topicId = topicData.topicId();
+367          int partitionId = partitionData.partition();
+368          int leaderEpoch = partitionData.leaderEpoch();
+369          SharePartitionKey key = SharePartitionKey.getInstance(request.groupId(), topicId, partitionId);
+370
+371          ShareGroupOffset offsetValue = shareStateMap.get(key);
+372          List&lt;ReadShareGroupStateResponseData.StateBatch&gt; stateBatches = (offsetValue.stateBatches() != null &amp;&amp; !offsetValue.stateBatches().isEmpty()) ?
+373              offsetValue.stateBatches().stream()
+374                  .map(
+375                      stateBatch -&gt; new ReadShareGroupStateResponseData.StateBatch()
+376                          .setFirstOffset(stateBatch.firstOffset())
+377                          .setLastOffset(stateBatch.lastOffset())
+378                          .setDeliveryState(stateBatch.deliveryState())
+379                          .setDeliveryCount(stateBatch.deliveryCount())
+380                  ).toList() : List.of();
+381</code></pre></details>
+<details class="code" id="ev-share-epochs"><summary>share-epochs · ShareCoordinatorShard.java:774</summary><p>Writes reject stale source-leader epochs and stale state epochs.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L774">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java</a></p><pre class="guide-pre"><code>774          if (leaderEpochMap.containsKey(mapKey) &amp;&amp; leaderEpochMap.get(mapKey) &gt; partitionData.leaderEpoch()) {
+775              log.error(&quot;Write request leader epoch is smaller than last recorded current: {}, requested: {}.&quot;, leaderEpochMap.get(mapKey), partitionData.leaderEpoch());
+776              return Optional.of(getWriteErrorCoordinatorResult(Errors.FENCED_LEADER_EPOCH, null, topicId, partitionId));
+777          }
+778          if (stateEpochMap.containsKey(mapKey) &amp;&amp; stateEpochMap.get(mapKey) &gt; partitionData.stateEpoch()) {
+779              log.info(&quot;Write request state epoch is smaller than last recorded current: {}, requested: {}.&quot;, stateEpochMap.get(mapKey), partitionData.stateEpoch());
+780              return Optional.of(getWriteErrorCoordinatorResult(Errors.FENCED_STATE_EPOCH, null, topicId, partitionId));
+781          }
+782          if (metadataImage == null) {
+783              log.error(&quot;Metadata image is null&quot;);
+784              return Optional.of(getWriteErrorCoordinatorResult(Errors.UNKNOWN_TOPIC_OR_PARTITION, null, topicId, partitionId));
+785          }
+786          Optional&lt;CoordinatorMetadataImage.TopicMetadata&gt; topicMetadataOp = metadataImage.topicMetadata(topicId);
+787          if (topicMetadataOp.isEmpty() ||
+788              topicMetadataOp.get().partitionCount() &lt;= partitionId) {
+789              log.error(&quot;Topic or partition not found in metadata image when writing: {}:{}-{}.&quot;, topicId,
+790                  topicMetadataOp.map(CoordinatorMetadataImage.TopicMetadata::name).orElse(&quot;null&quot;), partitionId);
+791              return Optional.of(getWriteErrorCoordinatorResult(Errors.UNKNOWN_TOPIC_OR_PARTITION, null, topicId, partitionId));
+792          }
+793
+794          return Optional.empty();
+795      }
+796
+797      private Optional&lt;ReadShareGroupStateResponseData&gt; maybeGetReadStateError(ReadShareGroupStateRequestData request) {
+798          String groupId = request.groupId();
+799          ReadShareGroupStateRequestData.ReadStateData topicData = request.topics().get(0);
+800          ReadShareGroupStateRequestData.PartitionData partitionData = topicData.partitions().get(0);
+801          int leaderEpoch = partitionData.leaderEpoch();</code></pre></details>
+<details class="code" id="ev-share-cache"><summary>share-cache · SharePartition.java:755</summary><p>Source-leader delivery cache acquires records and schedules lock timers; acquisition is not an offset commit.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L755">core/src/main/java/kafka/server/share/SharePartition.java</a></p><pre class="guide-pre"><code>755      public ShareAcquiredRecords acquire(
+756          String memberId,
+757          ShareAcquireMode shareAcquireMode,
+758          int batchSize,
+759          int maxFetchRecords,
+760          long fetchOffset,
+761          FetchPartitionData fetchPartitionData,
+762          FetchIsolation isolationLevel
+763      ) {
+764          log.trace(&quot;Received acquire request for share partition: {}-{} memberId: {}&quot;, groupId, topicIdPartition, memberId);
+765          boolean isRecordLimitMode = isRecordLimitMode(shareAcquireMode);
+766          if (stateNotActive() || maxFetchRecords &lt;= 0) {
+767              // Nothing to acquire.
+768              return ShareAcquiredRecords.empty();
+769          }
+770
+771          RecordBatch lastBatch = fetchPartitionData.records.lastBatch().orElse(null);
+772          if (lastBatch == null) {
+773              // Nothing to acquire.
+774              return ShareAcquiredRecords.empty();
+775          }
+776
+777          // Though there shouldn't be any case where fetch batch is prior to start offset, as fetch
+778          // offset should have moved past start offset. However, check ensure that no records are
+779          // acquired prior to start offset.
+780          if (lastBatch.lastOffset() &lt; startOffset()) {
+781              // Fetch batch is prior to start offset, nothing to acquire.
+782              return ShareAcquiredRecords.empty();</code></pre></details>
+<details class="code" id="ev-share-init"><summary>share-init · SharePartition.java:448</summary><p>A replacement source leader reloads share state via the persister.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L448">core/src/main/java/kafka/server/share/SharePartition.java</a></p><pre class="guide-pre"><code>448          persister.readState(new ReadShareGroupStateParameters.Builder()
+449              .setGroupTopicPartitionData(new GroupTopicPartitionData.Builder&lt;PartitionIdLeaderEpochData&gt;()
+450                  .setGroupId(this.groupId)
+451                  .setTopicsData(List.of(new TopicData&lt;&gt;(topicIdPartition.topicId(),
+452                      List.of(PartitionFactory.newPartitionIdLeaderEpochData(topicIdPartition.partition(), leaderEpoch)))))
+453                  .build())
+454              .build()
+455          ).whenComplete((result, exception) -&gt; {
+456              Throwable throwable = null;
+457              // Batches read from the persister in the ARCHIVING state whose DLQ flow (phase 2) must be resumed.
+458              List&lt;DlqBatch&gt; dlqBatches = null;
+459              lock.writeLock().lock();
+460              try {
+461                  if (exception != null) {
+462                      log.error(&quot;Failed to initialize the share partition: {}-{}&quot;, groupId, topicIdPartition, exception);
+463                      throwable = exception;
+464                      return;
+465                  }
+466
+467                  if (result == null || result.topicsData() == null || result.topicsData().size() != 1) {
+468                      log.error(&quot;Failed to initialize the share partition: {}-{}. Invalid state found: {}.&quot;,
+469                          groupId, topicIdPartition, result);
+470                      throwable = new IllegalStateException(String.format(&quot;Failed to initialize the share partition %s-%s&quot;, groupId, topicIdPartition));
+471                      return;
+472                  }
+473
+474                  TopicData&lt;PartitionAllData&gt; state = result.topicsData().get(0);
+475                  if (state.topicId() != topicIdPartition.topicId() || state.partitions().size() != 1) {</code></pre></details>
+<details class="code" id="ev-share-ack"><summary>share-ack · SharePartition.java:2528</summary><p>Acknowledgement transitions wait on state persistence; errors roll back provisional local changes.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L2528">core/src/main/java/kafka/server/share/SharePartition.java</a></p><pre class="guide-pre"><code>2528      void rollbackOrProcessStateUpdates(
+2529          CompletableFuture&lt;Void&gt; future,
+2530          Throwable throwable,
+2531          List&lt;PersisterBatch&gt; persisterBatches
+2532      ) {
+2533          if (throwable != null) {
+2534              lock.writeLock().lock();
+2535              try {
+2536                  // Log in DEBUG to avoid flooding of logs for a faulty client.
+2537                  log.debug(&quot;Request failed for updating state, rollback any changed state&quot;
+2538                      + &quot; for the share partition: {}-{}&quot;, groupId, topicIdPartition);
+2539                  persisterBatches.forEach(persisterBatch -&gt; {
+2540                      persisterBatch.updatedState.completeStateTransition(false);
+2541                      if (persisterBatch.updatedState.state() == RecordState.AVAILABLE) {
+2542                          updateFindNextFetchOffset(true);
+2543                      }
+2544                      // If there is a failure, then update the deliveryCompleteCount only in case there are some records
+2545                      // which were in a Terminal state, but after rolling back they are in a non-Terminal state. We also
+2546                      // need to consider only those records that lie after the start offset, because LSO movement can happen
+2547                      // after local state transition begins but before writeState result is obtained.
+2548                      if (isStateTerminal(RecordState.forId(persisterBatch.stateBatch.deliveryState())) &amp;&amp; !isStateTerminal(persisterBatch.updatedState.state())) {
+2549                          deliveryCompleteCount.addAndGet(-numInFlightRecordsInBatch(persisterBatch.stateBatch.firstOffset(), persisterBatch.stateBatch.lastOffset()));
+2550                      }
+2551                  });
+2552              } finally {
+2553                  lock.writeLock().unlock();
+2554              }
+2555              future.completeExceptionally(throwable);</code></pre></details>
+<details class="code" id="ev-share-persist"><summary>share-persist · SharePartition.java:2858</summary><p>WriteShareGroupState carries state epoch, start offset, source leader epoch and state batches.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L2858">core/src/main/java/kafka/server/share/SharePartition.java</a></p><pre class="guide-pre"><code>2858      CompletableFuture&lt;Void&gt; writeShareGroupState(List&lt;PersisterStateBatch&gt; stateBatches) {
+2859          CompletableFuture&lt;Void&gt; future = new CompletableFuture&lt;&gt;();
+2860          persister.writeState(new WriteShareGroupStateParameters.Builder()
+2861              .setGroupTopicPartitionData(new GroupTopicPartitionData.Builder&lt;PartitionStateBatchData&gt;()
+2862                  .setGroupId(this.groupId)
+2863                  .setTopicsData(List.of(new TopicData&lt;&gt;(topicIdPartition.topicId(),
+2864                      List.of(PartitionFactory.newPartitionStateBatchData(
+2865                          topicIdPartition.partition(), stateEpoch, startOffset(), deliveryCompleteCount(), leaderEpoch, stateBatches))))
+2866                  ).build()).build())
+2867              .whenComplete((result, exception) -&gt; {
+2868                  if (exception != null) {
+2869                      log.error(&quot;Failed to write the share group state for share partition: {}-{}&quot;, groupId, topicIdPartition, exception);
+2870                      future.completeExceptionally(new IllegalStateException(String.format(&quot;Failed to write the share group state for share partition %s-%s&quot;,
+2871                          groupId, topicIdPartition), exception));
+2872                      return;
+2873                  }
+2874
+2875                  if (result == null || result.topicsData() == null || result.topicsData().size() != 1) {
+2876                      log.error(&quot;Failed to write the share group state for share partition: {}-{}. Invalid state found: {}&quot;,
+2877                          groupId, topicIdPartition, result);
+2878                      future.completeExceptionally(new IllegalStateException(String.format(&quot;Failed to write the share group state for share partition %s-%s&quot;,
+2879                          groupId, topicIdPartition)));
+2880                      return;
+2881                  }
+2882
+2883                  TopicData&lt;PartitionErrorData&gt; state = result.topicsData().get(0);
+2884                  if (state.topicId() != topicIdPartition.topicId() || state.partitions().size() != 1
+2885                      || state.partitions().get(0).partition() != topicIdPartition.partition()) {</code></pre></details>
+<details class="code" id="ev-share-states"><summary>share-states · RecordState.java:26</summary><p>Delivery states include branch-specific ARCHIVING for the DLQ flow; this baseline has no TX_PENDING.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/share/fetch/RecordState.java#L26">server/src/main/java/org/apache/kafka/server/share/fetch/RecordState.java</a></p><pre class="guide-pre"><code>26  public enum RecordState {
+27      AVAILABLE((byte) 0),
+28      ACQUIRED((byte) 1),
+29      ACKNOWLEDGED((byte) 2),
+30      ARCHIVING((byte) 3),    // Per KIP-1191
+31      ARCHIVED((byte) 4);
+32
+33      public final byte id;
+34
+35      RecordState(byte id) {
+36          this.id = id;
+37      }
+38
+39      /**
+40       * Validates that the &lt;code&gt;newState&lt;/code&gt; is one of the valid transition from the current
+41       * {@code RecordState}.
+42       *
+43       * @param newState State into which requesting to transition; must be non-&lt;code&gt;null&lt;/code&gt;
+44       *
+45       * @return {@code RecordState} &lt;code&gt;newState&lt;/code&gt; if validation succeeds. Returning
+46       *         &lt;code&gt;newState&lt;/code&gt; helps state assignment chaining.
+47       *
+48       * @throws IllegalStateException if the state transition validation fails.
+49       */
+50      public RecordState validateTransition(RecordState newState) throws IllegalStateException {
+51          Objects.requireNonNull(newState, &quot;newState cannot be null&quot;);
+52          if (this == newState) {
+53              throw new IllegalStateException(&quot;The state transition is invalid as the new state is &quot;</code></pre></details>
+<details class="code" id="ev-txn-route"><summary>txn-route · TransactionStateManager.scala:439</summary><p>Transactional ID hashes to a __transaction_state partition.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L439">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>439    def partitionFor(transactionalId: String): Int = Utils.abs(transactionalId.hashCode) % transactionTopicPartitionCount
+440
+441    private def loadTransactionMetadata(topicPartition: TopicPartition, coordinatorEpoch: Int): ConcurrentMap[String, TransactionMetadata] =  {
+442      def logEndOffset = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
+443
+444      val loadedTransactions = new ConcurrentHashMap[String, TransactionMetadata]
+445
+446      replicaManager.getLog(topicPartition) match {
+447        case None =&gt;
+448          warn(s&quot;Attempted to load transaction metadata from $topicPartition, but found no log&quot;)
+449
+450        case Some(log) =&gt;
+451          // buffer may not be needed if records are read from memory
+452          var buffer = ByteBuffer.allocate(0)
+453
+454          // loop breaks if leader changes at any time during the load, since logEndOffset is -1
+455          var currOffset = log.logStartOffset
+456
+457          // loop breaks if no records have been read, since the end of the log has been reached
+458          var readAtLeastOneRecord = true
+459
+460          try {
+461            while (currOffset &lt; logEndOffset &amp;&amp; readAtLeastOneRecord &amp;&amp; !shuttingDown.get() &amp;&amp; inReadLock(stateLock, () =&gt; {
+462              loadingPartitions.exists { idAndEpoch: TransactionPartitionAndLeaderEpoch =&gt;
+463                idAndEpoch.txnPartitionId == topicPartition.partition &amp;&amp; idAndEpoch.coordinatorEpoch == coordinatorEpoch}})) {
+464              val fetchDataInfo = log.read(currOffset, config.transactionLogLoadBufferSize, FetchIsolation.LOG_END, true)
+465
+466              readAtLeastOneRecord = fetchDataInfo.records.sizeInBytes &gt; 0</code></pre></details>
+<details class="code" id="ev-find-schema"><summary>find-schema · FindCoordinatorRequest.json:17</summary><p>Coordinator key types and canonical share-key format are versioned wire contract.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/FindCoordinatorRequest.json#L17">clients/src/main/resources/common/message/FindCoordinatorRequest.json</a></p><pre class="guide-pre"><code>17    &quot;apiKey&quot;: 10,
+18    &quot;type&quot;: &quot;request&quot;,
+19    &quot;listeners&quot;: [&quot;broker&quot;],
+20    &quot;name&quot;: &quot;FindCoordinatorRequest&quot;,
+21    // Version 1 adds KeyType.
+22    //
+23    // Version 2 is the same as version 1.
+24    //
+25    // Version 3 is the first flexible version.
+26    //
+27    // Version 4 adds support for batching via CoordinatorKeys (KIP-699)
+28    //
+29    // Version 5 adds support for new error code TRANSACTION_ABORTABLE (KIP-890).
+30    //
+31    // Version 6 adds support for share groups (KIP-932).
+32    // For key type SHARE (2), the coordinator key format is &quot;groupId:topicId:partition&quot;.
+33    &quot;validVersions&quot;: &quot;0-6&quot;,
+34    &quot;flexibleVersions&quot;: &quot;3+&quot;,
+35    &quot;fields&quot;: [
+36      { &quot;name&quot;: &quot;Key&quot;, &quot;type&quot;: &quot;string&quot;, &quot;versions&quot;: &quot;0-3&quot;,
+37        &quot;about&quot;: &quot;The coordinator key.&quot; },
+38      { &quot;name&quot;: &quot;KeyType&quot;, &quot;type&quot;: &quot;int8&quot;, &quot;versions&quot;: &quot;1+&quot;, &quot;default&quot;: &quot;0&quot;, &quot;ignorable&quot;: false,
+39        &quot;about&quot;: &quot;The coordinator key type. (group, transaction, share).&quot; },
+40      { &quot;name&quot;: &quot;CoordinatorKeys&quot;, &quot;type&quot;: &quot;[]string&quot;, &quot;versions&quot;: &quot;4+&quot;,
+41        &quot;about&quot;: &quot;The coordinator keys.&quot; }
+42    ]
+43  }
+44</code></pre></details>
+<details class="code" id="ev-marker-handler"><summary>marker-handler · KafkaApis.scala:1748</summary><p>Participant brokers append control batches; __consumer_offsets markers use the group coordinator completion path.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L1748">core/src/main/scala/kafka/server/KafkaApis.scala</a></p><pre class="guide-pre"><code>1748    def handleWriteTxnMarkersRequest(request: Request, requestLocal: RequestLocal): Unit = {
+1749      // We are checking for AlterCluster permissions first. If it is not present, we are authorizing cluster operation
+1750      // The latter will throw an exception if it is denied.
+1751      if (!authHelper.authorize(request.context, ALTER, CLUSTER, CLUSTER_NAME, true, false, 1)) {
+1752        authHelper.authorizeClusterOperation(request, CLUSTER_ACTION)
+1753      }
+1754      val writeTxnMarkersRequest = request.body(classOf[WriteTxnMarkersRequest])
+1755      val errors = new ConcurrentHashMap[java.lang.Long, util.Map[TopicPartition, Errors]]()
+1756      // List of transaction marker entries, each containing producer metadata, transaction result (commit/abort),
+1757      // target partitions, and transaction version.
+1758      val markers = writeTxnMarkersRequest.markers
+1759      val numAppends = new AtomicInteger(markers.size)
+1760
+1761      if (numAppends.get == 0) {
+1762        requestHelper.sendResponseExemptThrottle(request, new WriteTxnMarkersResponse(errors))
+1763        return
+1764      }
+1765
+1766      def updateErrors(producerId: Long, currentErrors: ConcurrentHashMap[TopicPartition, Errors]): Unit = {
+1767        val previousErrors = errors.putIfAbsent(producerId, currentErrors)
+1768        if (previousErrors != null)
+1769          previousErrors.putAll(currentErrors)
+1770      }
+1771
+1772      /**
+1773        * This is the call back invoked when a log append of transaction markers succeeds. This can be called multiple
+1774        * times when handling a single WriteTxnMarkersRequest because there is one append per TransactionMarker in the
+1775        * request, so there could be multiple appends of markers to the log. The final response will be sent only</code></pre></details>
+<details class="code" id="ev-test-runtime"><summary>test-runtime · CoordinatorRuntimeTest.java:182</summary><p>Test covers failed shard loading, rather than treating elected ownership as immediately ready.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java#L182">coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java</a></p><pre class="guide-pre"><code>182      public void testScheduleLoadingWithFailure() {
+183          MockTimer timer = new MockTimer();
+184          MockPartitionWriter writer = mock(MockPartitionWriter.class);
+185          MockCoordinatorLoader loader = mock(MockCoordinatorLoader.class);
+186          MockCoordinatorShardBuilderSupplier supplier = mock(MockCoordinatorShardBuilderSupplier.class);
+187          MockCoordinatorShardBuilder builder = mock(MockCoordinatorShardBuilder.class);
+188          MockCoordinatorShard coordinator = mock(MockCoordinatorShard.class);
+189
+190          CoordinatorRuntime&lt;MockCoordinatorShard, String&gt; runtime =
+191              new CoordinatorRuntime.Builder&lt;MockCoordinatorShard, String&gt;()
+192                  .withTime(timer.time())
+193                  .withTimer(timer)
+194                  .withLoader(loader)
+195                  .withWriteTimeout(DEFAULT_WRITE_TIMEOUT)
+196                  .withEventProcessor(new DirectEventProcessor())
+197                  .withPartitionWriter(writer)
+198                  .withCoordinatorShardBuilderSupplier(supplier)
+199                  .withCoordinatorRuntimeMetrics(mock(CoordinatorRuntimeMetrics.class))
+200                  .withCoordinatorMetrics(mock(CoordinatorMetrics.class))
+201                  .withSerializer(new StringSerializer())
+202                  .withExecutorService(mock(ExecutorService.class))
+203                  .withCachedBufferMaxBytesSupplier(() -&gt; CACHED_BUFFER_MAX_BYTES)
+204                  .build();
+205
+206          when(builder.withSnapshotRegistry(any())).thenReturn(builder);
+207          when(builder.withLogContext(any())).thenReturn(builder);
+208          when(builder.withTime(any())).thenReturn(builder);
+209          when(builder.withTimer(any())).thenReturn(builder);</code></pre></details>
+<details class="code" id="ev-test-share-fence"><summary>test-share-fence · ShareCoordinatorShardTest.java:546</summary><p>Inspected test rejects stale source-leader writes without generating state records.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java#L546">share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java</a></p><pre class="guide-pre"><code>546      public void testWriteStateFencedLeaderEpochError() {
+547          initSharePartition(shard, SHARE_PARTITION_KEY);
+548          writeAndReplayRecord(shard, 1);
+549
+550          WriteShareGroupStateRequestData request1 = new WriteShareGroupStateRequestData()
+551              .setGroupId(GROUP_ID)
+552              .setTopics(List.of(new WriteShareGroupStateRequestData.WriteStateData()
+553                  .setTopicId(TOPIC_ID)
+554                  .setPartitions(List.of(new WriteShareGroupStateRequestData.PartitionData()
+555                      .setPartition(PARTITION)
+556                      .setStartOffset(0)
+557                      .setDeliveryCompleteCount(11)
+558                      .setStateEpoch(0)
+559                      .setLeaderEpoch(0)
+560                      .setStateBatches(List.of(new WriteShareGroupStateRequestData.StateBatch()
+561                          .setFirstOffset(0)
+562                          .setLastOffset(10)
+563                          .setDeliveryCount((short) 1)
+564                          .setDeliveryState((byte) 0)))))));
+565
+566          CoordinatorResult&lt;WriteShareGroupStateResponseData, CoordinatorRecord&gt; result = shard.writeState(request1);
+567
+568          WriteShareGroupStateResponseData expectedData = WriteShareGroupStateResponse.toErrorResponseData(
+569              TOPIC_ID, PARTITION, Errors.FENCED_LEADER_EPOCH, Errors.FENCED_LEADER_EPOCH.message());
+570          List&lt;CoordinatorRecord&gt; expectedRecords = List.of();
+571
+572          assertEquals(expectedData, result.response());
+573          assertEquals(expectedRecords, result.records());</code></pre></details>
+<details class="code" id="ev-test-share-state"><summary>test-share-state · ShareCoordinatorShardTest.java:578</summary><p>Inspected test rejects a stale share state epoch.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java#L578">share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java</a></p><pre class="guide-pre"><code>578      public void testWriteStateFencedStateEpochError() {
+579          initSharePartition(shard, SHARE_PARTITION_KEY, 1);
+580
+581          WriteShareGroupStateRequestData request1 = new WriteShareGroupStateRequestData()
+582              .setGroupId(GROUP_ID)
+583              .setTopics(List.of(new WriteShareGroupStateRequestData.WriteStateData()
+584                  .setTopicId(TOPIC_ID)
+585                  .setPartitions(List.of(new WriteShareGroupStateRequestData.PartitionData()
+586                      .setPartition(PARTITION)
+587                      .setStartOffset(0)
+588                      .setDeliveryCompleteCount(10)
+589                      .setStateEpoch(0)   // Lower state epoch in the second request.
+590                      .setLeaderEpoch(5)
+591                      .setStateBatches(List.of(new WriteShareGroupStateRequestData.StateBatch()
+592                          .setFirstOffset(11)
+593                          .setLastOffset(20)
+594                          .setDeliveryCount((short) 1)
+595                          .setDeliveryState((byte) 0)))))));
+596
+597          CoordinatorResult&lt;WriteShareGroupStateResponseData, CoordinatorRecord&gt; result = shard.writeState(request1);
+598
+599          WriteShareGroupStateResponseData expectedData = WriteShareGroupStateResponse.toErrorResponseData(
+600              TOPIC_ID, PARTITION, Errors.FENCED_STATE_EPOCH, Errors.FENCED_STATE_EPOCH.message());
+601          List&lt;CoordinatorRecord&gt; expectedRecords = List.of();
+602
+603          assertEquals(expectedData, result.response());
+604          assertEquals(expectedRecords, result.records());
+605          assertNotEquals(5, shard.getLeaderMapValue(SHARE_PARTITION_KEY));</code></pre></details>
+<details class="code" id="ev-test-share-rollback"><summary>test-share-rollback · SharePartitionTest.java:3310</summary><p>Inspected test rolls back a failed acknowledgement batch to acquired state.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/java/kafka/server/share/SharePartitionTest.java#L3310">core/src/test/java/kafka/server/share/SharePartitionTest.java</a></p><pre class="guide-pre"><code>3310      public void testAcknowledgeRollbackWithFullBatchError() {
+3311          SharePartition sharePartition = SharePartitionBuilder.builder().withState(SharePartitionState.ACTIVE).build();
+3312          MemoryRecords records1 = memoryRecords(5, 5);
+3313          MemoryRecords records2 = memoryRecords(10, 5);
+3314          MemoryRecords records3 = memoryRecords(15, 5);
+3315          List&lt;AcquiredRecords&gt; acquiredRecordsList = fetchAcquiredRecords(sharePartition, records1, 5);
+3316
+3317          assertEquals(1, acquiredRecordsList.size());
+3318
+3319          acquiredRecordsList = fetchAcquiredRecords(sharePartition, records2, 5);
+3320
+3321          assertEquals(1, acquiredRecordsList.size());
+3322
+3323          acquiredRecordsList = fetchAcquiredRecords(sharePartition, records3, 5);
+3324
+3325          assertEquals(1, acquiredRecordsList.size());
+3326          // Cached data with offset 5-19 should exist.
+3327          assertEquals(3, sharePartition.cachedState().size());
+3328
+3329          CompletableFuture&lt;Void&gt; ackResult = sharePartition.acknowledge(
+3330              MEMBER_ID,
+3331              List.of(
+3332                  new ShareAcknowledgementBatch(5, 9, List.of(AcknowledgeType.RELEASE.id)),
+3333                  new ShareAcknowledgementBatch(10, 14, List.of(AcknowledgeType.ACCEPT.id)),
+3334                  new ShareAcknowledgementBatch(15, 19, List.of(AcknowledgeType.ACCEPT.id)),
+3335                  // Add another batch which should fail the request.
+3336                  new ShareAcknowledgementBatch(15, 19, List.of(AcknowledgeType.ACCEPT.id))));
+3337          assertTrue(ackResult.isCompletedExceptionally());</code></pre></details><p>Supporting versioned references: <a href="https://kafka.apache.org/41/design/protocol/">Kafka 4.1 protocol reference</a> (older than this source snapshot), and <a href="https://cwiki.apache.org/confluence/spaces/KAFKA/pages/255070434/KIP-932%2BQueues%2Bfor%2BKafka">KIP-932 share-group design</a>. Source wins where versioned documentation or proposals differ.</p><p><a href="kafka-recovery-validation.json">Artifact validation and source manifest</a></p></section><footer><a href="index.html">Field guide home</a><a href="kafka-rpc-atlas.html">Complete Kafka RPC schema atlas</a></footer></main></div></body></html>

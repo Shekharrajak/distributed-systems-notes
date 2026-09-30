@@ -1,0 +1,27 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(241,245,249) Application
+ participant U as Share consumer
+end
+box rgb(220,252,231) Source leader
+ participant L as SharePartition
+end
+box rgb(254,249,195) State shard
+ participant S as Share coordinator
+ participant R as State-topic replica
+end
+ U->>L: ShareFetch
+ L->>L: Acquire records + lock timer
+ L-->>U: Records and acquired ranges
+ U->>U: Process record / external side effect
+ U->>L: ShareAcknowledge(ACCEPT)
+ L->>L: Validate ownership, provisional transition
+ L->>S: WriteShareGroupState(epochs, batches)
+ S->>S: Append state record
+ R->>S: Replica Fetch
+ S-->>R: State records
+ R->>S: Fetch at advanced offset
+ S->>S: Advance high watermark
+ S-->>L: Success after durable write boundary
+ L->>L: Finalize local transition
+ L-->>U: Acknowledgement result
