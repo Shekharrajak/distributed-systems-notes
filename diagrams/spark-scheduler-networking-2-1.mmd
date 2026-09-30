@@ -1,0 +1,17 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#142337","lineColor":"#718096","actorBkg":"#eaf2fa","actorBorder":"#53728c","actorTextColor":"#142337","signalColor":"#526479","signalTextColor":"#142337","noteBkgColor":"#fff7d6","noteTextColor":"#423511"},"flowchart":{"curve":"basis","nodeSpacing":42,"rankSpacing":65,"htmlLabels":false,"padding":20},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":34,"noteMargin":16,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":175}}}%%
+sequenceDiagram
+
+box rgb(220,252,231) Executor processes
+ participant R as Reduce task
+ participant M as Map-output server
+end
+box rgb(224,242,254) Driver
+ participant D as DAGScheduler
+end
+ R->>M: Fetch shuffle block
+ M-->>R: Missing block / connection failure
+ R-->>D: FetchFailed
+ D->>D: Invalidate affected map output
+ D->>M: Schedule replacement map attempt
+ M-->>D: New output location
+ D->>R: Resubmit dependent work

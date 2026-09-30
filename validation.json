@@ -1,0 +1,876 @@
+{
+  "sourceRevisions": {
+    "Kafka": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81",
+    "flink": "07805482705f4b703cd19517ecedf12014b7b762",
+    "flink-connector-kafka": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b",
+    "spark": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+    "iceberg": "48330b8dacab6662242d252b39c8444190979bb2",
+    "datafusion": "4a5d58006e620bf6a175bb578be6652c3b330da9",
+    "datafusion-iceberg": "b12e9871dd2b2632cd05786d9f12dd6cde47dc2e",
+    "datafusion-comet": "1628c520096e12ba3fb13988d6ee235070e77e07",
+    "arrow-rs": "8208506f8f9ec193c08023ac2477d211d1d86d20"
+  },
+  "pages": 19,
+  "codeAnchors": 68,
+  "diagramCount": 55,
+  "rendered": [
+    {
+      "id": "index-1-1",
+      "width": 849.30078125,
+      "height": 913.031005859375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "index-2-1",
+      "width": 784.5,
+      "height": 752.416748046875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "01-kafka-record-lifecycle-1-1",
+      "width": 1709.09375,
+      "height": 651.7433471679688,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "01-kafka-record-lifecycle-2-1",
+      "width": 728,
+      "height": 827,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "01-kafka-record-lifecycle-2-2",
+      "width": 528.66015625,
+      "height": 1038.7353515625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "kafka-transactions-recovery-1-1",
+      "width": 988,
+      "height": 949,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "kafka-transactions-recovery-2-1",
+      "width": 796.0390625,
+      "height": 1196.469970703125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-kafka-streams-1-1",
+      "width": 1072.03125,
+      "height": 909.3898315429688,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-kafka-streams-2-1",
+      "width": 732,
+      "height": 781,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-kafka-streams-3-1",
+      "width": 602.4765625,
+      "height": 940.9840087890625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "03-kafka-connect-1-1",
+      "width": 1211.671630859375,
+      "height": 1061.542236328125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "03-kafka-connect-2-1",
+      "width": 727,
+      "height": 695,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "03-kafka-connect-3-1",
+      "width": 951,
+      "height": 715,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "04-flink-runtime-1-1",
+      "width": 1221.31640625,
+      "height": 948.3170166015625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "04-flink-runtime-2-1",
+      "width": 726,
+      "height": 691,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "04-flink-runtime-2-2",
+      "width": 726,
+      "height": 839,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "01-plan-and-deploy-1-1",
+      "width": 329.015625,
+      "height": 813.7799682617188,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "01-plan-and-deploy-2-1",
+      "width": 341.890625,
+      "height": 1117.7763671875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-records-time-and-backpressure-1-1",
+      "width": 915.1015625,
+      "height": 614.8350219726562,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-records-time-and-backpressure-2-1",
+      "width": 721,
+      "height": 607,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "02-records-time-and-backpressure-3-1",
+      "width": 541.578125,
+      "height": 633.0999755859375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-state-checkpoint-recovery-1-1",
+      "width": 988,
+      "height": 1073,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-state-checkpoint-recovery-2-1",
+      "width": 655.046875,
+      "height": 972.5665893554688,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-state-checkpoint-recovery-3-1",
+      "width": 633.9140625,
+      "height": 776.0899658203125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-kafka-connector-1-1",
+      "width": 749,
+      "height": 719,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-kafka-connector-2-1",
+      "width": 680.75,
+      "height": 742.8181762695312,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "flink-kafka-connector-2-2",
+      "width": 721,
+      "height": 625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "spark-scheduler-networking-1-1",
+      "width": 746.90234375,
+      "height": 1020.066162109375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "spark-scheduler-networking-2-1",
+      "width": 721,
+      "height": 695,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "05-spark-structured-streaming-1-1",
+      "width": 1007,
+      "height": 709,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "05-spark-structured-streaming-2-1",
+      "width": 451.078125,
+      "height": 992.77685546875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "iceberg-storage-commits-1-1",
+      "width": 431.125,
+      "height": 1016.6312255859375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "iceberg-storage-commits-2-1",
+      "width": 721,
+      "height": 763,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "iceberg-storage-commits-2-2",
+      "width": 899.28125,
+      "height": 595.0491333007812,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "iceberg-storage-commits-3-1",
+      "width": 724,
+      "height": 715,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "iceberg-storage-commits-4-1",
+      "width": 352.65625,
+      "height": 937.8819580078125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "datafusion-query-engine-1-1",
+      "width": 1054.3125,
+      "height": 844.8203125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "datafusion-query-engine-2-1",
+      "width": 914.96875,
+      "height": 976.5558471679688,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "datafusion-query-engine-2-2",
+      "width": 693,
+      "height": 695,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "datafusion-query-engine-3-1",
+      "width": 771.4140625,
+      "height": 803.990966796875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "comet-spark-native-1-1",
+      "width": 395.796875,
+      "height": 1066.2840576171875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "comet-spark-native-2-1",
+      "width": 732,
+      "height": 767,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "comet-spark-native-3-1",
+      "width": 641.8125,
+      "height": 849.9457397460938,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "rust-arrow-runtime-1-1",
+      "width": 634.140625,
+      "height": 479.74346923828125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "rust-arrow-runtime-1-2",
+      "width": 346.484375,
+      "height": 765.7373657226562,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "rust-arrow-runtime-2-1",
+      "width": 491,
+      "height": 787,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "end-to-end-example-1-1",
+      "width": 979,
+      "height": 1037,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "end-to-end-example-2-1",
+      "width": 646.0625,
+      "height": 821.7589111328125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "end-to-end-example-3-1",
+      "width": 951,
+      "height": 739,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "end-to-end-example-4-1",
+      "width": 777.921875,
+      "height": 965.4431762695312,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "end-to-end-example-5-1",
+      "width": 642.859375,
+      "height": 512.775390625,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "06-delivery-and-recovery-2-1",
+      "width": 328.515625,
+      "height": 882.072021484375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "06-delivery-and-recovery-3-1",
+      "width": 786.0784912109375,
+      "height": 961.0362548828125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "06-delivery-and-recovery-4-1",
+      "width": 610.6171875,
+      "height": 915.08740234375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    },
+    {
+      "id": "06-delivery-and-recovery-5-1",
+      "width": 625.65625,
+      "height": 1174.985107421875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "overlaps": []
+    }
+  ],
+  "unitTestsExecuted": false,
+  "notes": [
+    "Source and test anchors resolve in local checkouts.",
+    "SVGs embed Ubuntu; font was loaded before text measurement.",
+    "Overlap check compares flowchart edge labels to nodes and other edge labels; visual inspection supplements it.",
+    "Performance examples are estimates, not benchmark measurements."
+  ],
+  "artifactChecks": {
+    "links": 1151,
+    "broken": [],
+    "pages": [
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.9,
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.9683131407269339,
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999974216171617,
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999974427168577,
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 5,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 4,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.9848341232227488,
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 5,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 4,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "images": 0,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.9,
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999828296703297,
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999873481781376,
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999792703150912,
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999901419558359,
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999870867768595,
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999908625730995,
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999869972260749,
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999857088414634,
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999862334801763,
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999869972260749,
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "images": 2,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999930862831859,
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "images": 5,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999645892351275,
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "images": 4,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999819624819625,
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999763257575758,
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "images": 3,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999809063136456,
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "images": 5,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999805598755832,
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "images": 4,
+        "brokenImages": [],
+        "minimumDiagramScale": 0.8999846563011457,
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "images": 0,
+        "brokenImages": [],
+        "minimumDiagramScale": 1,
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      }
+    ],
+    "errors": [],
+    "screenshots": [
+      "index-1440.png",
+      "index-diagram-1440.png",
+      "flink-kafka-connector-1440.png",
+      "comet-spark-native-1440.png",
+      "index-390.png",
+      "index-diagram-390.png",
+      "gallery-1.png",
+      "gallery-2.png",
+      "gallery-3.png",
+      "gallery-4.png",
+      "gallery-5.png",
+      "gallery-6.png",
+      "gallery-7.png"
+    ],
+    "zoomWorks": true,
+    "sourceExpands": true
+  },
+  "artifactChecksPassed": true,
+  "relocation": {
+    "destination": "/Users/srajak/Documents/repos/talks/notes",
+    "linksChecked": 1153,
+    "broken": [],
+    "oldHtmlPathsRedirect": true
+  }
+}

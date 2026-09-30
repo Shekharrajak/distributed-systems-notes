@@ -1,0 +1,18 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#142337","lineColor":"#718096","actorBkg":"#eaf2fa","actorBorder":"#53728c","actorTextColor":"#142337","signalColor":"#526479","signalTextColor":"#142337","noteBkgColor":"#fff7d6","noteTextColor":"#423511"},"flowchart":{"curve":"basis","nodeSpacing":42,"rankSpacing":65,"htmlLabels":false,"padding":20},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":34,"noteMargin":16,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":175}}}%%
+sequenceDiagram
+
+box rgb(237,233,254) Streams process
+ participant T as Stream task
+ participant P as StreamsProducer
+end
+box rgb(241,245,249) Kafka
+ participant K as Kafka transaction participants
+end
+ T->>T: Process input, update local store
+ T->>P: Send output and changelog records
+ P->>K: Produce transactional records
+ T->>P: Commit processed offsets
+ P->>K: sendOffsetsToTransaction
+ P->>K: commitTransaction
+ K-->>P: Commit decision acknowledged
+ Note over T,K: read_committed consumers observe committed Kafka results

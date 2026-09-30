@@ -1,0 +1,208 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>End to end: one event and every crash window · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><script defer src="app.js"></script></head><body data-page="end-to-end-example.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Architecture · messages · code · failures</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Kafka, Rust, recovery…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 16 · source-backed walkthrough</p><h1>End to end: one event and every crash window</h1><p class="intro">Use purchase-7 at Kafka orders P0 offset 104. Flink emits it, advances next offset to 105, updates c42 total to 100, and publishes output after checkpoint 42. Trace both a Kafka sink and an Iceberg sink, then follow a query reading the published table.</p><nav class="toc" aria-label="On this page"><a href="#section-1">Successful Kafka-to-Flink-to-Iceberg path</a><a href="#section-2">Failure before checkpoint completion</a><a href="#section-3">Failure after completion or after external publication</a><a href="#section-4">Querying the result with Spark and Comet</a><a href="#section-5">Two sinks are not one global commit</a></nav></div><section id="section-1"><p class="section-number">01</p><h2>Successful Kafka-to-Flink-to-Iceberg path</h2><p>The producer acknowledges a Kafka append according to its selected durability settings. The Flink reader fetches record 104, emits it and stores next offset 105. The keyed operator updates the customer total. An Iceberg writer writes data files and produces file metadata. Uploaded files are not yet published table rows.</p><p>CP42 captures the source position, operator state and pending sink information. After durable completion, the Iceberg committer publishes snapshot S900 and records the checkpoint identity. A query resolving S900 sees its files; a query pinned to S899 continues reading that older snapshot until it chooses a later one.</p><p>These event IDs, offsets, totals and snapshot names are illustrative. No live purchase pipeline was run. The sequence combines the inspected component contracts; version compatibility and deployment configuration require integration validation.</p><figure class="diagram" id="end-to-end-example-1-1"><figcaption><h3>The record, checkpoint and table commit</h3><p>The writer and committer are Flink operators, not a standalone Iceberg compute service. Their catalog and file-storage calls are expanded in the Iceberg chapter. A file upload alone is not the table visibility point.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/end-to-end-example-1-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/end-to-end-example-1-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The record, checkpoint and table commit"><img src="diagrams/end-to-end-example-1-1.svg" alt="The record, checkpoint and table commit. The writer and committer are Flink operators, not a standalone Iceberg compute service. Their catalog and file-storage calls are expanded in the Iceberg chapter. A file upload alone is not the table visibility point." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#fk-emit">fk-emit</a> <a class="cite" href="07-code-evidence.html#fk-state">fk-state</a> <a class="cite" href="07-code-evidence.html#flink-checkpoint">flink-checkpoint</a> <a class="cite" href="07-code-evidence.html#iceberg-flink">iceberg-flink</a></div></figure></section><section id="section-2"><p class="section-number">02</p><h2>Failure before checkpoint completion</h2><p>Suppose CP41 stored next offset 100 and total 70. The task processes offsets 100..104 but CP42 does not complete. Recovery restores CP41 and replays from 100. Buffered / uploaded sink work belonging only to the failed attempt must not become an extra independently published effect.</p><p>For KafkaSink, abandoned transactions require abort / cleanup according to connector recovery rules; read_committed consumers must not see aborted output. For Iceberg, files written before a successful metadata publication can be unreferenced. Cleanup must distinguish genuinely orphaned files from a commit whose outcome is still unknown.</p><figure class="diagram" id="end-to-end-example-2-1"><figcaption><h3>Rollback the recovery position, not the Kafka input log</h3><p>Input remains in Kafka. The replacement task replays it against restored state.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/end-to-end-example-2-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/end-to-end-example-2-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Rollback the recovery position, not the Kafka input log"><img src="diagrams/end-to-end-example-2-1.svg" alt="Rollback the recovery position, not the Kafka input log. Input remains in Kafka. The replacement task replays it against restored state." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#flink-restore">flink-restore</a> <a class="cite" href="07-code-evidence.html#fk-writer">fk-writer</a> <a class="cite" href="07-code-evidence.html#iceberg-snapshot">iceberg-snapshot</a></div></figure></section><section id="section-3"><p class="section-number">03</p><h2>Failure after completion or after external publication</h2><p>If CP42 is complete but its sink notification is lost, the replacement attempt uses CP42 recovery data to finish the pending commit. It must not simply start reading at 105 and forget the pending sink transaction or file set.</p><p>If S900 was published but the committer lost its response, replaying the commit must not publish duplicate logical output. The Iceberg Flink path reconciles the maximum committed checkpoint for the restored job / operator identity. The Kafka sink uses the recovered producer / transaction protocol and error taxonomy.</p><p>Flink optional group-offset commit may still show P0=100 while CP42 is complete at 105. This discrepancy is possible because the external group commit is independent bookkeeping. It is not evidence by itself that Flink will replay from 100.</p><figure class="diagram" id="end-to-end-example-3-1"><figcaption><h3>An ambiguous Iceberg commit response</h3><p>The table state is consulted before treating the pending checkpoint as new work.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/end-to-end-example-3-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/end-to-end-example-3-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: An ambiguous Iceberg commit response"><img src="diagrams/end-to-end-example-3-1.svg" alt="An ambiguous Iceberg commit response. The table state is consulted before treating the pending checkpoint as new work." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#iceberg-recover">iceberg-recover</a> <a class="cite" href="07-code-evidence.html#iceberg-flink">iceberg-flink</a></div></figure><div class="table-scroll"><table><thead><tr><th>Crash point</th><th>Durable evidence</th><th>Expected recovery action</th></tr></thead><tbody><tr><td>Before producer acknowledgement</td><td>Kafka outcome may be unknown</td><td>Retry under producer protocol / application identity; do not infer absence from timeout.</td></tr><tr><td>After Flink emission, before CP42 completion</td><td>CP41 remains the recovery cut</td><td>Replay records after CP41 with restored operator state.</td></tr><tr><td>After CP42 completion, before external commit</td><td>CP42 includes source and sink recovery state</td><td>Recover pending sink commit; do not drop it.</td></tr><tr><td>After external commit, before local success handling</td><td>Destination may already contain committed result</td><td>Reconcile / idempotently retry using transaction or checkpoint identity.</td></tr><tr><td>After Spark Kafka write, before commits/42</td><td>Offset-log range exists without completion marker</td><td>Replay can duplicate Kafka output; destination dedupe required.</td></tr><tr><td>During read of pinned Iceberg snapshot</td><td>Snapshot identifies immutable table state</td><td>Retry scan tasks against the same snapshot when files remain retained.</td></tr></tbody></table></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#fk-offset">fk-offset</a> <a class="cite" href="07-code-evidence.html#spark-kafka">spark-kafka</a></div></section><section id="section-4"><p class="section-number">04</p><h2>Querying the result with Spark and Comet</h2><p>The query resolves an Iceberg snapshot and plans candidate files using table metadata. Spark divides the physical plan into stages and schedules executor tasks. Compatible Comet segments execute native DataFusion operators in those executor processes. Parquet reads create Arrow batches; shuffle exchanges keyed intermediate results across executors when required.</p><p>A file or shuffle task failure is handled by the Spark retry envelope. A query pinned to S900 can replay deterministic reads of its retained files. Comet does not create the Iceberg snapshot or independently recover Spark stage state merely by using Rust.</p><figure class="diagram" id="end-to-end-example-4-1"><figcaption><h3>Published snapshot to distributed native query</h3><p>Catalog lookup and object-store reads are network operations. JNI calls are local to each executor.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/end-to-end-example-4-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/end-to-end-example-4-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Published snapshot to distributed native query"><img src="diagrams/end-to-end-example-4-1.svg" alt="Published snapshot to distributed native query. Catalog lookup and object-store reads are network operations. JNI calls are local to each executor." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#iceberg-scan">iceberg-scan</a> <a class="cite" href="07-code-evidence.html#spark-launch">spark-launch</a> <a class="cite" href="07-code-evidence.html#comet-jni">comet-jni</a> <a class="cite" href="07-code-evidence.html#spark-shuffle">spark-shuffle</a></div></figure></section><section id="section-5"><p class="section-number">05</p><h2>Two sinks are not one global commit</h2><p>A job may write both Kafka transaction T42 and Iceberg snapshot S900 after CP42. The checkpoint aligns their recovery state, but their external commit decisions are independent. One can become visible before the other. Readers comparing them need a shared event / checkpoint identity, reconciliation or a dedicated publication protocol.</p><p>If atomic cross-system visibility is a hard requirement, design that contract explicitly. A common approach is to expose a separate publication marker after both destinations have committed, with readers respecting that marker. That is an application design and requires its own durable recovery handling; it is not implicit in Flink checkpointing.</p><figure class="diagram" id="end-to-end-example-5-1"><figcaption><h3>One checkpoint can release two independent commits</h3><p>The missing edge between external commits is deliberate: neither destination atomically commits the other.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/end-to-end-example-5-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/end-to-end-example-5-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: One checkpoint can release two independent commits"><img src="diagrams/end-to-end-example-5-1.svg" alt="One checkpoint can release two independent commits. The missing edge between external commits is deliberate: neither destination atomically commits the other." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#flink-checkpoint">flink-checkpoint</a> <a class="cite" href="07-code-evidence.html#fk-commit">fk-commit</a> <a class="cite" href="07-code-evidence.html#iceberg-flink">iceberg-flink</a></div></figure></section><section><h2>Inside the implementation</h2><p>These excerpts come directly from the code paths used above. Expand a component to move from the system view into its implementation.</p><details class="code" id="fk-emit"><summary>fk-emit <span>KafkaRecordEmitter.java:45</span></summary><p>The emitted record advances checkpointable split state to offset+1.</p><p class="path"><a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java</a> · ae656dd6fe23</p><pre><code>  44      @Override
+  45      public void emitRecord(
+  46              ConsumerRecord&lt;byte[], byte[]&gt; consumerRecord,
+  47              SourceOutput&lt;T&gt; output,
+  48              KafkaPartitionSplitState splitState)
+  49              throws Exception {
+  50          try {
+  51              sourceOutputWrapper.setSourceOutput(output);
+  52              sourceOutputWrapper.setTimestamp(consumerRecord.timestamp());
+  53              deserializationSchema.deserialize(consumerRecord, sourceOutputWrapper);
+  54              splitState.setCurrentOffset(consumerRecord.offset() + 1);
+  55          } catch (Exception e) {
+  56              throw new IOException(&quot;Failed to deserialize consumer record due to&quot;, e);
+  57          }
+  58      }</code></pre></details><details class="code" id="fk-state"><summary>fk-state <span>KafkaSourceReader.java:98</span></summary><p>Checkpoint state is distinct from optional Kafka group offset commits.</p><p class="path"><a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a> · ae656dd6fe23</p><pre><code>  97      @Override
+  98      public List&lt;KafkaPartitionSplit&gt; snapshotState(long checkpointId) {
+  99          List&lt;KafkaPartitionSplit&gt; splits = super.snapshotState(checkpointId);
+ 100          if (!commitOffsetsOnCheckpoint) {
+ 101              return splits;
+ 102          }
+ 103
+ 104          if (splits.isEmpty() &amp;&amp; offsetsOfFinishedSplits.isEmpty()) {
+ 105              offsetsToCommit.put(checkpointId, Collections.emptyMap());
+ 106          } else {
+ 107              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsMap =
+ 108                      offsetsToCommit.computeIfAbsent(checkpointId, id -&gt; new HashMap&lt;&gt;());
+ 109              // Put the offsets of the active splits.
+ 110              for (KafkaPartitionSplit split : splits) {
+ 111                  // If the checkpoint is triggered before the partition starting offsets</code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java">KafkaSourceReaderTest.java</a> · testOffsetCommitOnCheckpointComplete</p></details><details class="code" id="flink-checkpoint"><summary>flink-checkpoint <span>CheckpointCoordinator.java:1360</span></summary><p>Completed checkpoint storage precedes notifications.</p><p class="path"><a href="../../oss/tmp/flink/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java">flink/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java</a> · 07805482705f</p><pre><code>1359       */
+1360      private void completePendingCheckpoint(PendingCheckpoint pendingCheckpoint)
+1361              throws CheckpointException {
+1362          final long checkpointId = pendingCheckpoint.getCheckpointID();
+1363          final CompletedCheckpoint completedCheckpoint;
+1364          final CompletedCheckpoint lastSubsumed;
+1365          final CheckpointProperties props = pendingCheckpoint.getProps();
+1366
+1367          completedCheckpointStore.getSharedStateRegistry().checkpointCompleted(checkpointId);
+1368
+1369          try {
+1370              completedCheckpoint = finalizeCheckpoint(pendingCheckpoint);
+1371
+1372              // the pending checkpoint must be discarded after the finalization
+1373              Preconditions.checkState(pendingCheckpoint.isDisposed() &amp;&amp; completedCheckpoint != null);</code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/flink/flink-runtime/src/test/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinatorRestoringTest.java">CheckpointCoordinatorRestoringTest.java</a></p></details><details class="code" id="iceberg-flink"><summary>iceberg-flink <span>IcebergFilesCommitter.java:231</span></summary><p>Checkpoint completion publishes files through an Iceberg snapshot.</p><p class="path"><a href="../../oss/tmp/iceberg/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java">iceberg/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java</a> · 48330b8dacab</p><pre><code> 230    @Override
+ 231    public void notifyCheckpointComplete(long checkpointId) throws Exception {
+ 232      super.notifyCheckpointComplete(checkpointId);
+ 233      // It's possible that we have the following events:
+ 234      //   1. snapshotState(ckpId);
+ 235      //   2. snapshotState(ckpId+1);
+ 236      //   3. notifyCheckpointComplete(ckpId+1);
+ 237      //   4. notifyCheckpointComplete(ckpId);
+ 238      // For step#4, we don't need to commit iceberg table again because in step#3 we've committed all
+ 239      // the files,
+ 240      // Besides, we need to maintain the max-committed-checkpoint-id to be increasing.
+ 241      if (checkpointId &gt; maxCommittedCheckpointId) {
+ 242        LOG.info(&quot;Checkpoint {} completed. Attempting commit.&quot;, checkpointId);
+ 243        commitUpToCheckpoint(dataFilesPerCheckpoint, flinkJobId, operatorUniqueId, checkpointId);
+ 244        this.maxCommittedCheckpointId = checkpointId;</code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/iceberg/flink/v2.3/flink/src/test/java/org/apache/iceberg/flink/sink/TestIcebergFilesCommitter.java">TestIcebergFilesCommitter.java</a> · public void testRecoveryFromSnapshotWithoutCompletedNotification</p></details><details class="code" id="flink-restore"><summary>flink-restore <span>DefaultScheduler.java:358</span></summary><p>Cancel, reset, restore and redeploy task attempts.</p><p class="path"><a href="../../oss/tmp/flink/flink-runtime/src/main/java/org/apache/flink/runtime/scheduler/DefaultScheduler.java">flink/flink-runtime/src/main/java/org/apache/flink/runtime/scheduler/DefaultScheduler.java</a> · 07805482705f</p><pre><code> 357
+ 358      private void restartTasksWithDelay(final FailureHandlingResult failureHandlingResult) {
+ 359          final Set&lt;ExecutionVertexID&gt; verticesToRestart =
+ 360                  failureHandlingResult.getVerticesToRestart();
+ 361
+ 362          final Set&lt;ExecutionVertexVersion&gt; executionVertexVersions =
+ 363                  new HashSet&lt;&gt;(
+ 364                          executionVertexVersioner
+ 365                                  .recordVertexModifications(verticesToRestart)
+ 366                                  .values());
+ 367          final boolean globalRecovery = failureHandlingResult.isGlobalFailure();
+ 368
+ 369          if (globalRecovery) {
+ 370              log.info(
+ 371                      &quot;{} tasks will be restarted to recover from a global failure.&quot;,</code></pre></details><details class="code" id="fk-writer"><summary>fk-writer <span>ExactlyOnceKafkaWriter.java:221</span></summary><p>Prepare a transaction receipt; snapshot then starts the next transaction.</p><p class="path"><a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/ExactlyOnceKafkaWriter.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/ExactlyOnceKafkaWriter.java</a> · ae656dd6fe23</p><pre><code> 220      @Override
+ 221      public Collection&lt;KafkaCommittable&gt; prepareCommit() {
+ 222          // only return a KafkaCommittable if the current transaction has been written some data
+ 223          if (currentProducer.hasRecordsInTransaction()) {
+ 224              KafkaCommittable committable = KafkaCommittable.of(currentProducer);
+ 225              LOG.debug(&quot;Prepare {}.&quot;, committable);
+ 226              currentProducer.precommitTransaction();
+ 227              return Collections.singletonList(committable);
+ 228          }
+ 229
+ 230          // otherwise, we recycle the producer (the pool will reset the transaction state)
+ 231          producerPool.recycle(currentProducer);
+ 232          return Collections.emptyList();
+ 233      }
+ 234  </code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/KafkaSinkITCase.java">KafkaSinkITCase.java</a></p></details><details class="code" id="iceberg-snapshot"><summary>iceberg-snapshot <span>SnapshotProducer.java:484</span></summary><p>Retry on CommitFailedException; ambiguous commit state propagates without unsafe cleanup.</p><p class="path"><a href="../../oss/tmp/iceberg/core/src/main/java/org/apache/iceberg/SnapshotProducer.java">iceberg/core/src/main/java/org/apache/iceberg/SnapshotProducer.java</a> · 48330b8dacab</p><pre><code> 483    @SuppressWarnings(&quot;checkstyle:CyclomaticComplexity&quot;)
+ 484    public void commit() {
+ 485      // this is always set to the latest commit attempt's snapshot id.
+ 486      AtomicLong newSnapshotId = new AtomicLong(-1L);
+ 487      try (Timed ignore = commitMetrics().totalDuration().start()) {
+ 488        try {
+ 489          Tasks.foreach(ops)
+ 490              .retry(base.propertyAsInt(COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT))
+ 491              .exponentialBackoff(
+ 492                  base.propertyAsInt(COMMIT_MIN_RETRY_WAIT_MS, COMMIT_MIN_RETRY_WAIT_MS_DEFAULT),
+ 493                  base.propertyAsInt(COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT),
+ 494                  base.propertyAsInt(COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT),
+ 495                  2.0 /* exponential */)
+ 496              .onlyRetryOn(CommitFailedException.class)
+ 497              .countAttempts(commitMetrics().attempts())</code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/iceberg/core/src/test/java/org/apache/iceberg/TestSnapshotProducer.java">TestSnapshotProducer.java</a></p></details><details class="code" id="fk-offset"><summary>fk-offset <span>KafkaSourceReader.java:126</span></summary><p>Offset commit failure is logged; restored Flink split state remains the recovery authority.</p><p class="path"><a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a> · ae656dd6fe23</p><pre><code> 125      @Override
+ 126      public void notifyCheckpointComplete(long checkpointId) throws Exception {
+ 127          LOG.debug(&quot;Committing offsets for checkpoint {}&quot;, checkpointId);
+ 128          if (!commitOffsetsOnCheckpoint) {
+ 129              return;
+ 130          }
+ 131
+ 132          Map&lt;TopicPartition, OffsetAndMetadata&gt; committedPartitions =
+ 133                  offsetsToCommit.get(checkpointId);
+ 134          if (committedPartitions == null) {
+ 135              LOG.debug(&quot;Offsets for checkpoint {} have already been committed.&quot;, checkpointId);
+ 136              return;
+ 137          }
+ 138
+ 139          if (committedPartitions.isEmpty()) {</code></pre></details><details class="code" id="spark-kafka"><summary>spark-kafka <span>KafkaSink.scala:34</span></summary><p>Process-local latestBatchId guards repeated calls; it is not a durable Kafka transaction.</p><p class="path"><a href="../../oss/tmp/spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSink.scala">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSink.scala</a> · f9358a5587a2</p><pre><code>  33
+  34    override def addBatch(batchId: Long, data: DataFrame): Unit = {
+  35      if (batchId &lt;= latestBatchId) {
+  36        logInfo(log&quot;Skipping already committed batch ${MDC(BATCH_ID, batchId)}&quot;)
+  37      } else {
+  38        KafkaWriter.write(data.queryExecution,
+  39          executorKafkaParams, topic)
+  40        latestBatchId = batchId
+  41      }
+  42    }
+  43  }
+  44  </code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/spark/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaSinkSuite.scala">KafkaSinkSuite.scala</a></p></details><details class="code" id="iceberg-recover"><summary>iceberg-recover <span>IcebergFilesCommitter.java:166</span></summary><p>Restoration reconciles recorded checkpoint IDs against published table snapshots.</p><p class="path"><a href="../../oss/tmp/iceberg/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java">iceberg/flink/v2.3/flink/src/main/java/org/apache/iceberg/flink/sink/IcebergFilesCommitter.java</a> · 48330b8dacab</p><pre><code> 165              () -&gt; table, table.properties(), flinkJobId, operatorUniqueId, subTaskId, attemptId);
+ 166      this.maxCommittedCheckpointId = INITIAL_CHECKPOINT_ID;
+ 167
+ 168      this.checkpointsState = context.getOperatorStateStore().getListState(STATE_DESCRIPTOR);
+ 169      this.jobIdState = context.getOperatorStateStore().getListState(JOB_ID_DESCRIPTOR);
+ 170      if (context.isRestored()) {
+ 171        Iterable&lt;String&gt; jobIdIterable = jobIdState.get();
+ 172        if (jobIdIterable == null || !jobIdIterable.iterator().hasNext()) {
+ 173          LOG.warn(
+ 174              &quot;Failed to restore committer state. This can happen when operator uid changed and Flink &quot;
+ 175                  + &quot;allowNonRestoredState is enabled. Best practice is to explicitly set the operator id &quot;
+ 176                  + &quot;via FlinkSink#Builder#uidPrefix() so that the committer operator uid is stable. &quot;
+ 177                  + &quot;Otherwise, Flink auto generate an operator uid based on job topology.&quot;
+ 178                  + &quot;With that, operator uid is subjective to change upon topology change.&quot;);
+ 179          return;</code></pre></details><details class="code" id="iceberg-scan"><summary>iceberg-scan <span>DataTableScan.java:64</span></summary><p>Snapshot manifests are filtered and planned into file scan tasks.</p><p class="path"><a href="../../oss/tmp/iceberg/core/src/main/java/org/apache/iceberg/DataTableScan.java">iceberg/core/src/main/java/org/apache/iceberg/DataTableScan.java</a> · 48330b8dacab</p><pre><code>  63    @Override
+  64    public CloseableIterable&lt;FileScanTask&gt; doPlanFiles() {
+  65      Snapshot snapshot = snapshot();
+  66
+  67      FileIO io = table().io();
+  68      List&lt;ManifestFile&gt; dataManifests = snapshot.dataManifests(io);
+  69      List&lt;ManifestFile&gt; deleteManifests = snapshot.deleteManifests(io);
+  70      scanMetrics().totalDataManifests().increment((long) dataManifests.size());
+  71      scanMetrics().totalDeleteManifests().increment((long) deleteManifests.size());
+  72      ManifestGroup manifestGroup =
+  73          new ManifestGroup(io, dataManifests, deleteManifests)
+  74              .caseSensitive(isCaseSensitive())
+  75              .select(scanColumns())
+  76              .filterData(filter())
+  77              .schemasById(schemas())</code></pre></details><details class="code" id="spark-launch"><summary>spark-launch <span>CoarseGrainedSchedulerBackend.scala:457</span></summary><p>Driver serializes task descriptions and sends LaunchTask to executor endpoints.</p><p class="path"><a href="../../oss/tmp/spark/core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala">spark/core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala</a> · f9358a5587a2</p><pre><code> 456      // Launch tasks returned by a set of resource offers
+ 457      private def launchTasks(tasks: Seq[Seq[TaskDescription]]): Unit = {
+ 458        for (task &lt;- tasks.flatten) {
+ 459          val serializedTask = TaskDescription.encode(task)
+ 460          if (serializedTask.limit() &gt;= maxRpcMessageSize) {
+ 461            Option(scheduler.taskIdToTaskSetManager.get(task.taskId)).foreach { taskSetMgr =&gt;
+ 462              try {
+ 463                var msg = &quot;Serialized task %s:%d was %d bytes, which exceeds max allowed: &quot; +
+ 464                  s&quot;${RPC_MESSAGE_MAX_SIZE.key} (%d bytes). Consider increasing &quot; +
+ 465                  s&quot;${RPC_MESSAGE_MAX_SIZE.key} or using broadcast variables for large values.&quot;
+ 466                msg = msg.format(task.taskId, task.index, serializedTask.limit(), maxRpcMessageSize)
+ 467                taskSetMgr.abort(msg)
+ 468              } catch {
+ 469                case e: Exception =&gt; logError(&quot;Exception in error callback&quot;, e)
+ 470              }</code></pre></details><details class="code" id="comet-jni"><summary>comet-jni <span>jni_api.rs:1242</span></summary><p>Native execution uses a DataFusion plan inside the Spark executor process.</p><p class="path"><a href="../../oss/tmp/datafusion-comet/native/core/src/execution/jni_api.rs">datafusion-comet/native/core/src/execution/jni_api.rs</a> · 1628c520096e</p><pre><code>1241                  // so we should always execute partition 0.
+1242                  let stream = root_op.native_plan.execute(0, task_ctx)?;
+1243
+1244                  if exec_context.scans.is_empty() &amp;&amp; exec_context.shuffle_scans.is_empty() {
+1245                      // No JVM data sources — spawn onto tokio so the executor
+1246                      // thread parks in blocking_recv instead of busy-polling.
+1247                      exec_context.batch_producer =
+1248                          Some(BatchProducer::spawn(&amp;get_runtime(), stream));
+1249                  } else {
+1250                      exec_context.stream = Some(stream);
+1251                  }
+1252                  exec_context.root_op = Some(root_op);
+1253              } else {
+1254                  // Pull input batches
+1255                  pull_input_batches(exec_context)?;</code></pre></details><details class="code" id="spark-shuffle"><summary>spark-shuffle <span>ShuffleBlockFetcherIterator.scala:86</span></summary><p>Reducers fetch local or remote shuffle blocks.</p><p class="path"><a href="../../oss/tmp/spark/core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala">spark/core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala</a> · f9358a5587a2</p><pre><code>  85  private[spark]
+  86  final class ShuffleBlockFetcherIterator(
+  87      context: TaskContext,
+  88      shuffleClient: BlockStoreClient,
+  89      blockManager: BlockManager,
+  90      mapOutputTracker: MapOutputTracker,
+  91      blocksByAddress: Iterator[(BlockManagerId, collection.Seq[(BlockId, Long, Int)])],
+  92      streamWrapper: (BlockId, InputStream) =&gt; InputStream,
+  93      maxBytesInFlight: Long,
+  94      maxReqsInFlight: Int,
+  95      maxBlocksInFlightPerAddress: Int,
+  96      val maxReqSizeShuffleToMem: Long,
+  97      maxAttemptsOnNettyOOM: Int,
+  98      detectCorrupt: Boolean,
+  99      detectCorruptUseExtraMemory: Boolean,</code></pre></details><details class="code" id="fk-commit"><summary>fk-commit <span>KafkaCommitter.java:103</span></summary><p>Retryable and fenced transaction failures are distinguished.</p><p class="path"><a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java</a> · ae656dd6fe23</p><pre><code> 102                  producer = writerProducer.orElseGet(() -&gt; getProducer(committable));
+ 103                  producer.commitTransaction();
+ 104                  backchannel.send(TransactionFinished.successful(committable.getTransactionalId()));
+ 105              } catch (RetriableException e) {
+ 106                  LOG.warn(
+ 107                          &quot;Encountered retriable exception while committing {}.&quot;, transactionalId, e);
+ 108                  request.retryLater();
+ 109              } catch (ProducerFencedException e) {
+ 110                  logFencedRequest(request, e);
+ 111                  handleFailedTransaction(producer);
+ 112                  request.signalFailedWithKnownReason(e);
+ 113              } catch (InvalidTxnStateException e) {
+ 114                  // This exception only occurs when aborting after a commit or vice versa.
+ 115                  // It does not appear on double commits or double aborts.
+ 116                  LOG.error(</code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitterTest.java">KafkaCommitterTest.java</a></p></details></section><footer><a href="rust-arrow-runtime.html">Previous: Rust and Arrow: ownership, async work and failure</a><a href="06-delivery-and-recovery.html">Next: Design tradeoffs: latency, throughput and resilience</a></footer></main></div></body></html>

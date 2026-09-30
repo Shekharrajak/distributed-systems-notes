@@ -1,0 +1,21 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#142337","lineColor":"#718096","actorBkg":"#eaf2fa","actorBorder":"#53728c","actorTextColor":"#142337","signalColor":"#526479","signalTextColor":"#142337","noteBkgColor":"#fff7d6","noteTextColor":"#423511"},"flowchart":{"curve":"basis","nodeSpacing":42,"rankSpacing":65,"htmlLabels":false,"padding":20},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":34,"noteMargin":16,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":175}}}%%
+flowchart TB
+
+subgraph pipeline["Bounded processing stage"]
+ direction TB
+ A["Incoming records"]:::io --> Q{"Queue has capacity?"}:::state
+ Q -->|"yes"| P["Process at sustainable rate"]:::runtime
+ Q -->|"no"| B{"Overload policy"}:::state
+ B -->|"backpressure"| W["Slow upstream"]:::control
+ B -->|"reject / shed"| R["Explicit failure or dropped work"]:::fail
+ B -->|"durable buffer"| D[("Retained log / backlog")]:::store
+end
+
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e,stroke-width:1.6px
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:1.6px
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764,stroke-width:1.6px
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12,stroke-width:1.6px
+classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12,stroke-width:1.6px
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155,stroke-width:1.6px
+classDef fail fill:#fee2e2,stroke:#dc2626,color:#7f1d1d,stroke-width:1.6px
+linkStyle default stroke:#64748b,stroke-width:1.6px,stroke-linecap:round

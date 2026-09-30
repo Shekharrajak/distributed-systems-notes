@@ -1,0 +1,141 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Kafka: processes, storage and networking · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><script defer src="app.js"></script></head><body data-page="01-kafka-record-lifecycle.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Architecture · messages · code · failures</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Kafka, Rust, recovery…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 01 · source-backed walkthrough</p><h1>Kafka: processes, storage and networking</h1><p class="intro">Kafka turns a producer send into an ordered replicated log append. Follow the client, broker network threads, request handlers, partition leader, followers and consumer. The controller quorum governs cluster metadata; it is separate from ordinary record replication.</p><nav class="toc" aria-label="On this page"><a href="#section-1">Cluster components and ownership</a><a href="#section-2">Produce request: threads, queues and replies</a><a href="#section-3">Offsets and visibility are different frontiers</a><a href="#section-4">Throughput and latency design choices</a></nav></div><section id="section-1"><p class="section-number">01</p><h2>Cluster components and ownership</h2><p>Each topic is divided into partitions. Each partition has one leader and assigned replicas on brokers. Clients obtain metadata and route produce requests to the partition leader. Followers fetch from the leader and append to their own logs. Consumer groups divide partition ownership among consumer instances; consumers read data from brokers, not from the group coordinator.</p><p>KRaft controller nodes replicate metadata such as partition leadership and broker registrations. They do not replicate every application record through the controller log. The group coordinator stores group progress in __consumer_offsets. The transaction coordinator stores transaction state in __transaction_state. Their leadership is distributed across the broker cluster through internal-topic partitions.</p><figure class="diagram" id="01-kafka-record-lifecycle-1-1"><figcaption><h3>Kafka deployment topology</h3><p>A broker can host leaders, follower replicas and coordinators for different partitions. The controller role may run separately or share a process depending on deployment.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/01-kafka-record-lifecycle-1-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/01-kafka-record-lifecycle-1-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Kafka deployment topology"><img src="diagrams/01-kafka-record-lifecycle-1-1.svg" alt="Kafka deployment topology. A broker can host leaders, follower replicas and coordinators for different partitions. The controller role may run separately or share a process depending on deployment." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-api">kafka-api</a> <a class="cite" href="07-code-evidence.html#kafka-controller">kafka-controller</a> <a class="cite" href="07-code-evidence.html#kafka-txn-state">kafka-txn-state</a></div></figure><div class="table-scroll"><table><thead><tr><th>Component</th><th>In-memory responsibility</th><th>Durable authority</th></tr></thead><tbody><tr><td>Producer</td><td>Accumulator, batches, inflight requests, sequence bookkeeping</td><td>Broker log and producer state after append; client RAM alone is not durable.</td></tr><tr><td>Broker network + request handlers</td><td>Socket read/write, request queue, protocol handling</td><td>Partition log files and replicated coordinator state.</td></tr><tr><td>Partition leader</td><td>Ordering, ISR tracking, high watermark</td><td>Replicated log under the configured failure assumptions.</td></tr><tr><td>KRaft controller</td><td>Metadata decisions and leader changes</td><td>Replicated metadata quorum log.</td></tr><tr><td>Consumer</td><td>Fetched position, records returned to application</td><td>Group committed offset or engine-specific checkpoint, depending on the consumer.</td></tr></tbody></table></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-socket">kafka-socket</a></div></section><section id="section-2"><p class="section-number">02</p><h2>Produce request: threads, queues and replies</h2><p>KafkaProducer serializes and accumulates records into partition batches. The Sender thread drains ready batches and groups Produce requests by destination broker. A send future completes when its response or terminal error is handled; calling send is not a durability acknowledgement.</p><p>The broker accepts connections and network processors decode requests into a request channel. Request handlers dispatch through KafkaApis. ReplicaManager validates required acknowledgements, appends through the leader Partition, and completes immediately or registers delayed produce work. Network processors write the eventual response. Disk appends usually enter the OS page cache; acks=all is not a promise to fsync every replica for every record.</p><figure class="diagram" id="01-kafka-record-lifecycle-2-1"><figcaption><h3>Successful produce with replication</h3><p>Followers pull. Their subsequent fetch offsets let the leader observe replication progress. This diagram models a successful acks=all path, omitting protocol retries.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/01-kafka-record-lifecycle-2-1.svg" target="_blank">Full-size SVG</a><a href="diagrams/01-kafka-record-lifecycle-2-1.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Successful produce with replication"><img src="diagrams/01-kafka-record-lifecycle-2-1.svg" alt="Successful produce with replication. Followers pull. Their subsequent fetch offsets let the leader observe replication progress. This diagram models a successful acks=all path, omitting protocol retries." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-sender">kafka-sender</a> <a class="cite" href="07-code-evidence.html#kafka-replicas">kafka-replicas</a> <a class="cite" href="07-code-evidence.html#kafka-partition">kafka-partition</a> <a class="cite" href="07-code-evidence.html#kafka-hw">kafka-hw</a></div></figure><figure class="diagram" id="01-kafka-record-lifecycle-2-2"><figcaption><h3>Inside the broker process</h3><p>Network I/O and append processing are decoupled. A waiting all-ack request need not block a handler thread for the whole replication delay.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/01-kafka-record-lifecycle-2-2.svg" target="_blank">Full-size SVG</a><a href="diagrams/01-kafka-record-lifecycle-2-2.mmd">Mermaid source</a><span class="diagram-hint">Scroll inside the diagram to explore. Text stays readable by default.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Inside the broker process"><img src="diagrams/01-kafka-record-lifecycle-2-2.svg" alt="Inside the broker process. Network I/O and append processing are decoupled. A waiting all-ack request need not block a handler thread for the whole replication delay." loading="lazy"></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-socket">kafka-socket</a> <a class="cite" href="07-code-evidence.html#kafka-api">kafka-api</a> <a class="cite" href="07-code-evidence.html#kafka-replicas">kafka-replicas</a></div></figure></section><section id="section-3"><p class="section-number">03</p><h2>Offsets and visibility are different frontiers</h2><p>The log end offset (LEO) is the next append position in one replica. The high watermark (HW) bounds the replicated committed prefix available to ordinary consumers. The last stable offset (LSO) also accounts for incomplete transactions and bounds read_committed reads. These are next-offset boundaries, not counts of business events.</p><p>Example: leader LEO=120 and HW=116. An open transaction starts at 110, so read_committed may be held at LSO=110 even if later records are replicated. Closing that transaction and processing its marker permits the stable frontier to advance. An unrelated long-running transaction can therefore add visibility latency to later records in that partition.</p><p>A group committed offset of 105 means resume at 105. The application may already have fetched through 115. Fetching and returning a record, processing it, making its sink effect durable, and committing group progress are four separate milestones.</p><div class="table-scroll"><table><thead><tr><th>Read or acknowledgement mode</th><th>What it waits for</th><th>Tradeoff</th></tr></thead><tbody><tr><td>acks=0</td><td>No Produce response</td><td>Least feedback and weakest ability to know whether a write was accepted.</td></tr><tr><td>acks=1</td><td>Leader append response</td><td>Lower replication wait; leader loss before replication can lose acknowledged data.</td></tr><tr><td>acks=all with adequate ISR</td><td>Current in-sync replication requirement and successful append checks</td><td>Stronger durability; insufficient ISR rejects writes and sacrifices write availability.</td></tr><tr><td>read_uncommitted</td><td>Committed log frontier, without transactional filtering</td><td>May expose aborted transaction data.</td></tr><tr><td>read_committed</td><td>Stable transactional frontier and abort filtering</td><td>Correct transaction visibility; open transactions can delay later records.</td></tr></tbody></table></div><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-hw">kafka-hw</a> <a class="cite" href="07-code-evidence.html#kafka-partition">kafka-partition</a> <a class="cite" href="07-code-evidence.html#kafka-txn">kafka-txn</a></div></section><section id="section-4"><p class="section-number">04</p><h2>Throughput and latency design choices</h2><p>Batching amortizes protocol headers, system calls and compression setup. Increasing batch size or linger can increase bytes per request and compression efficiency, while adding low-load latency. Partitioning distributes leaders and consumers, but raises metadata, buffer, file and coordination overhead. A hot key remains serial within its partition.</p><p>Fetch minimum bytes / wait time trade response frequency for aggregation. Compression spends CPU to save network and storage. Inflight requests hide round-trip delay but consume memory and require careful retry ordering. Persistent connections and sequential log I/O reduce repeated setup costs. A bounded producer buffer eventually blocks or fails sends if brokers cannot drain it.</p><p>For replication factor r and ingress B bytes/s, a first-order cross-broker replication estimate is (r-1)*B bytes/s before compression, protocol overhead and placement effects. This is a sizing model, not a measured capacity claim. Always check broker network, disk flush pressure, request queue time and p99 latency together.</p><div class="refs">Source: <a class="cite" href="07-code-evidence.html#kafka-producer">kafka-producer</a> <a class="cite" href="07-code-evidence.html#kafka-sender">kafka-sender</a> <a class="cite" href="07-code-evidence.html#kafka-replicas">kafka-replicas</a></div></section><section><h2>Inside the implementation</h2><p>These excerpts come directly from the code paths used above. Expand a component to move from the system view into its implementation.</p><details class="code" id="kafka-socket"><summary>kafka-socket <span>SocketServer.scala:74</span></summary><p>Acceptor / processor threads and request channels separate network I/O from request handling.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/network/SocketServer.scala">Kafka/core/src/main/scala/kafka/network/SocketServer.scala</a> · d2da6a18f839</p><pre><code>  73   */
+  74  class SocketServer(
+  75    val config: KafkaConfig,
+  76    val metrics: Metrics,
+  77    val time: Time,
+  78    val credentialProvider: CredentialProvider,
+  79    val apiVersionManager: ApiVersionManager,
+  80    val socketFactory: ServerSocketFactory = ServerSocketFactory.INSTANCE,
+  81    val connectionDisconnectListeners: Seq[ConnectionDisconnectListener] = Seq.empty
+  82  ) extends Logging with BrokerReconfigurable {
+  83    // Changing the package or class name may cause incompatibility with existing code and metrics configuration
+  84    private val metricsPackage = &quot;kafka.network&quot;
+  85    private val metricsClassName = &quot;SocketServer&quot;
+  86    private val metricsGroup = new KafkaMetricsGroup(metricsPackage, metricsClassName)
+  87  </code></pre></details><details class="code" id="kafka-api"><summary>kafka-api <span>KafkaApis.scala:400</span></summary><p>Broker protocol dispatch and per-partition validation.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/server/KafkaApis.scala">Kafka/core/src/main/scala/kafka/server/KafkaApis.scala</a> · d2da6a18f839</p><pre><code> 399     */
+ 400    def handleProduceRequest(request: Request, requestLocal: RequestLocal): Unit = {
+ 401      val produceRequest = request.body(classOf[ProduceRequest])
+ 402
+ 403      if (RequestUtils.hasTransactionalRecords(produceRequest)) {
+ 404        val isAuthorizedTransactional = produceRequest.transactionalId != null &amp;&amp;
+ 405          authHelper.authorize(request.context, WRITE, TRANSACTIONAL_ID, produceRequest.transactionalId)
+ 406        if (!isAuthorizedTransactional) {
+ 407          requestHelper.sendErrorResponseMaybeThrottle(request, Errors.TRANSACTIONAL_ID_AUTHORIZATION_FAILED.exception)
+ 408          return
+ 409        }
+ 410      }
+ 411
+ 412      val unauthorizedTopicResponses = mutable.Map[TopicIdPartition, PartitionResponse]()
+ 413      val nonExistingTopicResponses = mutable.Map[TopicIdPartition, PartitionResponse]()</code></pre></details><details class="code" id="kafka-controller"><summary>kafka-controller <span>QuorumController.java:176</span></summary><p>Metadata controller event loop and quorum-backed metadata changes.</p><p class="path"><a href="../../oss/tmp/Kafka/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java">Kafka/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java</a> · d2da6a18f839</p><pre><code> 175   */
+ 176  public final class QuorumController implements Controller {
+ 177      /**
+ 178       * The default maximum records that the controller will write in a single batch.
+ 179       */
+ 180      private static final int DEFAULT_MAX_RECORDS_PER_BATCH = 10000;
+ 181
+ 182      /**
+ 183       * The maximum records any user-initiated operation is allowed to generate.
+ 184       *
+ 185       * For now, this is set to the maximum records in a single batch.
+ 186       */
+ 187      static final int MAX_RECORDS_PER_USER_OP = DEFAULT_MAX_RECORDS_PER_BATCH;
+ 188
+ 189      /**</code></pre></details><details class="code" id="kafka-txn-state"><summary>kafka-txn-state <span>TransactionStateManager.scala:70</span></summary><p>Transaction coordinator state is persisted in Kafka.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala">Kafka/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a> · d2da6a18f839</p><pre><code>  69   */
+  70  class TransactionStateManager(brokerId: Int,
+  71                                scheduler: Scheduler,
+  72                                replicaManager: ReplicaManager,
+  73                                metadataCache: MetadataCache,
+  74                                config: TransactionConfig,
+  75                                time: Time,
+  76                                metrics: Metrics) extends Logging {
+  77
+  78    this.logIdent = &quot;[Transaction State Manager &quot; + brokerId + &quot;]: &quot;
+  79
+  80    private type SendTxnMarkersCallback = (Int, TransactionResult, TransactionMetadata, TxnTransitMetadata) =&gt; Unit
+  81
+  82    /** shutting down flag */
+  83    private val shuttingDown = new AtomicBoolean(false)</code></pre></details><details class="code" id="kafka-sender"><summary>kafka-sender <span>Sender.java:888</span></summary><p>ProduceRequest construction by broker destination.</p><p class="path"><a href="../../oss/tmp/Kafka/clients/src/main/java/org/apache/kafka/clients/producer/internals/Sender.java">Kafka/clients/src/main/java/org/apache/kafka/clients/producer/internals/Sender.java</a> · d2da6a18f839</p><pre><code> 887       */
+ 888      private void sendProduceRequests(Map&lt;Integer, List&lt;ProducerBatch&gt;&gt; collated, long now) {
+ 889          for (Map.Entry&lt;Integer, List&lt;ProducerBatch&gt;&gt; entry : collated.entrySet())
+ 890              sendProduceRequest(now, entry.getKey(), acks, requestTimeoutMs, entry.getValue());
+ 891      }
+ 892
+ 893      /**
+ 894       * Create a produce request from the given record batches
+ 895       */
+ 896      private void sendProduceRequest(long now, int destination, short acks, int timeout, List&lt;ProducerBatch&gt; batches) {
+ 897          if (batches.isEmpty())
+ 898              return;
+ 899
+ 900          final Map&lt;TopicPartition, ProducerBatch&gt; recordsByPartition = new HashMap&lt;&gt;(batches.size());
+ 901          Map&lt;String, Uuid&gt; topicIds = topicIdsForBatches(batches);</code></pre></details><details class="code" id="kafka-replicas"><summary>kafka-replicas <span>ReplicaManager.scala:638</span></summary><p>Append to leader logs and arrange delayed acknowledgements.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/server/ReplicaManager.scala">Kafka/core/src/main/scala/kafka/server/ReplicaManager.scala</a> · d2da6a18f839</p><pre><code> 637     */
+ 638    def appendRecords(timeout: Long,
+ 639                      requiredAcks: Short,
+ 640                      internalTopicsAllowed: Boolean,
+ 641                      origin: AppendOrigin,
+ 642                      entriesPerPartition: Map[TopicIdPartition, MemoryRecords],
+ 643                      responseCallback: util.Map[TopicIdPartition, PartitionResponse] =&gt; Unit,
+ 644                      recordValidationStatsCallback: Map[TopicIdPartition, RecordValidationStats] =&gt; Unit = _ =&gt; (),
+ 645                      requestLocal: RequestLocal = RequestLocal.noCaching,
+ 646                      verificationGuards: Map[TopicPartition, VerificationGuard] = Map.empty,
+ 647                      transactionVersion: Short = TransactionVersion.TV_UNKNOWN): Unit = {
+ 648      if (!isValidRequiredAcks(requiredAcks)) {
+ 649        sendInvalidRequiredAcksResponse(entriesPerPartition, responseCallback)
+ 650        return
+ 651      }</code></pre></details><details class="code" id="kafka-partition"><summary>kafka-partition <span>Partition.scala:1219</span></summary><p>Minimum ISR is checked for acks=-1 before append.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/cluster/Partition.scala">Kafka/core/src/main/scala/kafka/cluster/Partition.scala</a> · d2da6a18f839</p><pre><code>1218
+1219    def appendRecordsToLeader(
+1220      records: MemoryRecords,
+1221      origin: AppendOrigin,
+1222      requiredAcks: Int,
+1223      requestLocal: RequestLocal,
+1224      verificationGuard: VerificationGuard = VerificationGuard.SENTINEL,
+1225      transactionVersion: Short = TransactionVersion.TV_UNKNOWN
+1226    ): LogAppendInfo = {
+1227      val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock, () =&gt; {
+1228        leaderLogIfLocal match {
+1229          case Some(leaderLog) =&gt;
+1230            val minIsr = effectiveMinIsr(leaderLog)
+1231            val inSyncSize = partitionState.isr.size
+1232  </code></pre><p class="test">Test source inspected or located, not executed: <a href="../../oss/tmp/Kafka/core/src/test/scala/unit/kafka/cluster/PartitionTest.scala">PartitionTest.scala</a></p></details><details class="code" id="kafka-hw"><summary>kafka-hw <span>Partition.scala:947</span></summary><p>High watermark and replica conditions determine successful all-ack completion.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/cluster/Partition.scala">Kafka/core/src/main/scala/kafka/cluster/Partition.scala</a> · d2da6a18f839</p><pre><code> 946     */
+ 947    def checkEnoughReplicasReachOffset(requiredOffset: Long): (Boolean, Errors) = {
+ 948      leaderLogIfLocal match {
+ 949        case Some(leaderLog) =&gt;
+ 950          // keep the current immutable replica list reference
+ 951          val curMaximalIsr = partitionState.maximalIsr
+ 952
+ 953          if (isTraceEnabled) {
+ 954            def logEndOffsetString: ((Int, Long)) =&gt; String = {
+ 955              case (brokerId, logEndOffset) =&gt; s&quot;broker $brokerId: $logEndOffset&quot;
+ 956            }
+ 957
+ 958            val curInSyncReplicaObjects = (curMaximalIsr.asScala.map(_.toInt) - localBrokerId).flatMap(getReplica)
+ 959            val replicaInfo = curInSyncReplicaObjects.map(replica =&gt; (replica.brokerId, replica.stateSnapshot.logEndOffset))
+ 960            val localLogInfo = (localBrokerId, localLogOrException.logEndOffset)</code></pre></details><details class="code" id="kafka-txn"><summary>kafka-txn <span>TransactionCoordinator.scala:516</span></summary><p>Transaction decision and marker dispatch.</p><p class="path"><a href="../../oss/tmp/Kafka/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala">Kafka/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala</a> · d2da6a18f839</p><pre><code> 515
+ 516    def handleEndTransaction(transactionalId: String,
+ 517                             producerId: Long,
+ 518                             producerEpoch: Short,
+ 519                             txnMarkerResult: TransactionResult,
+ 520                             clientTransactionVersion: TransactionVersion,
+ 521                             responseCallback: EndTxnCallback,
+ 522                             requestLocal: RequestLocal = RequestLocal.noCaching): Unit = {
+ 523      endTransaction(transactionalId,
+ 524        producerId,
+ 525        producerEpoch,
+ 526        txnMarkerResult,
+ 527        isFromClient = true,
+ 528        clientTransactionVersion,
+ 529        responseCallback,</code></pre></details><details class="code" id="kafka-producer"><summary>kafka-producer <span>KafkaProducer.java:1126</span></summary><p>Serialization, partition selection and accumulation before the Sender network thread.</p><p class="path"><a href="../../oss/tmp/Kafka/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java">Kafka/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java</a> · d2da6a18f839</p><pre><code>1125       */
+1126      private Future&lt;RecordMetadata&gt; doSend(ProducerRecord&lt;K, V&gt; record, Callback callback) {
+1127          // Append callback takes care of the following:
+1128          //  - call interceptors and user callback on completion
+1129          //  - remember partition that is calculated in RecordAccumulator.append
+1130          AppendCallbacks appendCallbacks = new AppendCallbacks(callback, this.interceptors, record);
+1131
+1132          try {
+1133              throwIfProducerClosed();
+1134              throwIfInPreparedState();
+1135
+1136              // first make sure the metadata for the topic is available
+1137              long nowMs = time.milliseconds();
+1138              ClusterAndWaitTime clusterAndWaitTime;
+1139              try {</code></pre></details></section><footer><a href="index.html">Previous: Start with the whole system</a><a href="kafka-transactions-recovery.html">Next: Kafka: transactions and failure recovery</a></footer></main></div></body></html>
