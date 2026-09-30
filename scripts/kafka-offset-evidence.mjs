@@ -1,0 +1,62 @@
+const e=(repo,id,file,needle,claim)=>({repo,id,file,needle,claim});
+const kc='clients/src/main/java/org/apache/kafka/clients/consumer/';
+const kt='clients/src/test/java/org/apache/kafka/clients/consumer/internals/';
+const gc='group-coordinator/src/main/java/org/apache/kafka/coordinator/group/';
+const fc='flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/';
+const sc='connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/';
+const sd='connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/';
+const mb='sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala';
+export const evidence=[
+ e('Kafka','api-sync',kc+'KafkaConsumer.java','public void commitSync()','Public sync API delegates to the selected consumer implementation. Read its preceding timeout and callback contract.'),
+ e('Kafka','api-async',kc+'KafkaConsumer.java','public void commitAsync(final Map<TopicPartition, OffsetAndMetadata> offsets','Explicit offsets are copied. The preceding contract documents ordered async requests/callbacks and next-offset semantics.'),
+ e('Kafka','api-order-caveat',kc+'KafkaConsumer.java','but only when the consumer is using the consumer group protocol.','The pinned commitSync Javadoc qualifies its prior-async-callback guarantee by group protocol; do not erase this version-specific caveat.'),
+ e('Kafka','delegate',kc+'internals/ConsumerDelegateCreator.java','GroupProtocol groupProtocol =','group.protocol selects ClassicKafkaConsumer or AsyncKafkaConsumer, independently of the commit method name.'),
+ e('Kafka','classic-sync',kc+'internals/ConsumerCoordinator.java','public boolean commitOffsetsSync','Classic sync commit polls responses and retries retriable failures within the timer.'),
+ e('Kafka','classic-async',kc+'internals/ConsumerCoordinator.java','public RequestFuture<Void> commitOffsetsAsync','Classic async commit discovers the coordinator, submits without waiting for the acknowledgement, and queues completions.'),
+ e('Kafka','classic-callback',kc+'internals/ConsumerCoordinator.java','void invokeCompletedOffsetCommitCallbacks()','Completed callbacks are drained by consumer operations, not by a producer Sender thread.'),
+ e('Kafka','async-app',kc+'internals/AsyncKafkaConsumer.java','private void commitAsync(Optional','The application creates an AsyncCommitEvent and queues the user callback after the future completes.'),
+ e('Kafka','async-sync',kc+'internals/AsyncKafkaConsumer.java','private void commitSync(Optional','SyncCommitEvent waits for pending async completions and its own result under a timer.'),
+ e('Kafka','async-handoff',kc+'internals/AsyncKafkaConsumer.java','private CompletableFuture<Map<TopicPartition, OffsetAndMetadata>> commit(final CommitEvent','Even the async API can wait for the background thread to capture offsetsReady; async does not mean zero blocking work.'),
+ e('Kafka','commit-manager-async',kc+'internals/CommitRequestManager.java','public CompletableFuture<Map<TopicPartition, OffsetAndMetadata>> commitAsync','Explicit async commits are not retried after an errored attempt by this manager.'),
+ e('Kafka','commit-manager-sync',kc+'internals/CommitRequestManager.java','private void commitSyncWithRetries','Explicit sync commits retry retriable errors until the deadline, with non-retriable errors surfaced.'),
+ e('Kafka','callback-thread',kc+'internals/OffsetCommitCallbackInvoker.java','Utility class that helps the application thread','Background completion queues callbacks; the consumer application thread executes them during poll/commit/close.'),
+ e('Kafka','network-event',kc+'internals/events/ApplicationEventProcessor.java','private void process(final AsyncCommitEvent event)','The consumer network thread translates application commit events into CommitRequestManager work.'),
+ e('Kafka','wire-request','clients/src/main/resources/common/message/OffsetCommitRequest.json','"apiKey": 8','Both commit APIs use OffsetCommit API 8. Version 9 supports the consumer protocol; version 10 uses topic IDs.'),
+ e('Kafka','wire-response','clients/src/main/resources/common/message/OffsetCommitResponse.json','"name": "ThrottleTimeMs"','The response contains throttle time and per-topic/per-partition error codes, not an output-transaction result.'),
+ e('Kafka','broker-commit','core/src/main/scala/kafka/server/KafkaApis.scala','def handleOffsetCommitRequest','Broker authorizes group and topics, resolves topic identity, validates partitions, then delegates to the group coordinator.'),
+ e('Kafka','coordinator-commit',gc+'GroupCoordinatorService.java','public CompletableFuture<OffsetCommitResponseData> commitOffsets','The group ID selects a coordinator shard and a serialized write operation.'),
+ e('Kafka','coordinator-record',gc+'OffsetMetadataManager.java','public CoordinatorResult<OffsetCommitResponseData, CoordinatorRecord> commitOffset(','Validated partition offsets produce durable coordinator records.'),
+ e('Kafka','coordinator-replay',gc+'OffsetMetadataManager.java','OffsetAndMetadata previousValue = offsets.put(','Ordinary replay replaces a key with the value from this log record; it is not numeric max(offset).'),
+ e('Kafka','coordinator-hw','coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java','context.deferredEventQueue.completeUpTo(newHighWatermark);','Advancing the replicated high watermark releases deferred coordinator operation completions.'),
+ e('Kafka','test-async-no-retry',kt+'CommitRequestManagerTest.java','public void testOffsetCommitRequestErroredRequestsNotRetriedForAsyncCommit','Inspected test asserts no resend after a failed explicit async commit attempt.'),
+ e('Kafka','test-sync-retry',kt+'CommitRequestManagerTest.java','public void testCommitSyncRetriedAfterExpectedRetriableException','Inspected parameterized test covers sync retry classification.'),
+ e('Kafka','test-async-drain',kt+'AsyncKafkaConsumerTest.java','public void testCommitSyncAwaitsCommitAsyncCompletionWithEmptyOffsets','Inspected test covers pending async completion wait and timeout even for an empty sync map.'),
+ e('flink-connector-kafka','flink-emitter',fc+'source/reader/KafkaRecordEmitter.java','splitState.setCurrentOffset(consumerRecord.offset() + 1);','Flink tracks the next offset after successful deserialization/emission into the source output.'),
+ e('flink-connector-kafka','flink-snapshot',fc+'source/reader/KafkaSourceReader.java','public List<KafkaPartitionSplit> snapshotState','Split offsets remain checkpoint state even when Kafka offset committing is disabled.'),
+ e('flink-connector-kafka','flink-notify',fc+'source/reader/KafkaSourceReader.java','public void notifyCheckpointComplete','A completed checkpoint selects its saved offset map, not the latest prefetched position.'),
+ e('flink-connector-kafka','flink-commit-failure',fc+'source/reader/KafkaSourceReader.java','kafkaSourceReaderMetrics.recordFailedCommit();','Commit failure logs and records a metric; success prunes pending bookkeeping.'),
+ e('flink-connector-kafka','flink-fetcher',fc+'source/reader/fetcher/KafkaSourceFetcherManager.java','private void enqueueOffsetsCommitTask','Commit work is enqueued onto the split fetcher owning the Kafka consumer.'),
+ e('flink-connector-kafka','flink-client',fc+'source/reader/KafkaPartitionSplitReader.java','ensureConsumer().commitAsync(offsetsToCommit, offsetCommitCallback);','The modern KafkaSource uses the Kafka consumer async commit API.'),
+ e('flink-connector-kafka','flink-seek',fc+'source/reader/KafkaPartitionSplitReader.java','consumer.assign(newPartitionAssignments);','Flink assigns splits explicitly and seeks to their starting offsets.'),
+ e('flink-connector-kafka','flink-defaults',fc+'source/KafkaSourceBuilder.java','if (!props.containsKey(ConsumerConfig.GROUP_ID_CONFIG))','Missing group.id defaults checkpoint-offset commits off; auto commit defaults false rather than being universally forced off.'),
+ e('flink-connector-kafka','flink-options',fc+'source/KafkaSourceOptions.java','public static final ConfigOption<Boolean> COMMIT_OFFSETS_ON_CHECKPOINT','Checkpoint-offset committing defaults true, subject to builder configuration and a group ID.'),
+ e('flink-connector-kafka','flink-sink',fc+'sink/internal/KafkaCommitter.java','producer.commitTransaction();','Exactly-once sink finalization commits a producer transaction, not a consumer offset.'),
+ e('flink-connector-kafka','test-flink-complete','flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java','void testOffsetCommitOnCheckpointComplete()','Inspected test verifies Kafka group offsets after checkpoint-completion notification.'),
+ e('flink-connector-kafka','test-flink-disable','flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java','void testDisableOffsetCommit()','Inspected test verifies disabled commit bookkeeping while the source still snapshots.'),
+ e('spark','spark-config',sc+'KafkaSourceProvider.scala','val otherUnsupportedConfigs = Seq(','Structured Streaming rejects user-specified enable.auto.commit and sets it false on internal consumers.'),
+ e('spark','spark-noop',sc+'KafkaMicroBatchStream.scala','override def commit(end: Offset): Unit = {}','The Kafka microbatch source commit callback is a no-op, not KafkaConsumer.commitSync/Async.'),
+ e('spark','spark-fetch',sc+'consumer/KafkaDataConsumer.scala','def fetch(offset: Long, pollTimeoutMs: Long)','Executor consumer seeks and polls at offsets selected by Spark.'),
+ e('spark','spark-start',mb,'protected def markMicroBatchStart','Default synchronous microbatch execution durably logs planned end offsets before running the batch.'),
+ e('spark','spark-end',mb,'if (!commitLog.add(execCtx.batchId, metadata))','Successful batch completion adds a checkpoint commit-log entry.'),
+ e('spark','spark-output-order',mb,'execCtx.sinkCommitProgress = batchSinkProgress','Sink execution completes before markMicroBatchEnd in the ordinary microbatch path.'),
+ e('spark','spark-recovery',mb,'protected def populateStartOffsets','Recovery compares checkpoint offset and commit logs to choose replay versus next batch.'),
+ e('spark','spark-source-commit',mb,'protected def commitSources','Engine source.commit is a generic lifecycle callback; Kafka implements it as no-op.'),
+ e('spark','spark-sink',sc+'KafkaDataWriter.scala','def commit(): WriterCommitMessage','Kafka writer commit flushes producer sends and checks errors; it does not couple input group offsets into a Kafka transaction.'),
+ e('spark','spark-doc','docs/streaming/structured-streaming-kafka-integration.md',"Kafka source doesn't commit any offset.",'Version-pinned integration documentation explicitly states that Kafka source offsets are not committed.'),
+ e('spark','dstream-queue',sd+'DirectKafkaInputDStream.scala','def commitAsync(offsetRanges: Array[OffsetRange], callback: OffsetCommitCallback)','Legacy DStreams enqueue ranges and keep the most recent callback.'),
+ e('spark','dstream-drain',sd+'DirectKafkaInputDStream.scala','protected def commitAll(): Unit','A later compute drains queued ranges, takes maximum untilOffset per partition, then calls Kafka commitAsync.'),
+ e('spark','dstream-compute',sd+'DirectKafkaInputDStream.scala','currentOffsets = untilOffsets','DirectKafkaInputDStream.compute triggers commitAll on the driver.'),
+ e('spark','test-dstream','connector/kafka-0-10/src/test/scala/org/apache/spark/streaming/kafka010/DirectKafkaStreamSuite.scala','test("offset recovery from kafka")','Inspected integration test stores outputs before enqueueing commits and verifies restart offsets.'),
+ e('spark','test-spark-config','connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala','testUnsupportedConfig("kafka.enable.auto.commit")','Inspected test asserts that the source rejects this Kafka config.'),
+ e('spark','test-spark-log','sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala','test("SPARK-38033: SS cannot be started because the commitId and offsetId are inconsistent")','Inspected test fails recovery when the required checkpoint offset-log batch is missing.')
+];

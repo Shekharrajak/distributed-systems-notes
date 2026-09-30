@@ -1,0 +1,1523 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Offset commits: Kafka, Flink and Spark · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head><body data-page="kafka-offset-commits-flink-spark.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Offsets · checkpoints · callbacks · recovery</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Commit, checkpoint, failure…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 24 · Kafka + Flink + Spark</p><h1>Offset commits: Kafka, Flink and Spark</h1><p class="intro">What commitSync and commitAsync really acknowledge, which thread runs them, what survives a crash, and why Flink and Spark recover from different durable records.</p><p class="guide-footer-note">Read the summary first, follow one runtime, then expand its pinned code evidence.</p><nav class="toc" aria-label="On this page"><a href="#summary">Start here: whose progress is being committed?</a><a href="#positions">Four numbers that must not be confused</a><a href="#sync-async">commitSync versus commitAsync: exact contract</a><a href="#threads">Which process, thread and module runs the work?</a><a href="#wire">Follow one OffsetCommit through the distributed cluster</a><a href="#failure">Failure windows and the stale retry trap</a><a href="#examples">Plain Java consumer: correct order before API choice</a><a href="#flink">Flink: checkpoint authority, async offset publication</a><a href="#spark">Spark Structured Streaming: commit logs, not consumer commits</a><a href="#dstreams">Legacy Spark DStreams: the exception you may remember</a><a href="#tradeoffs">Latency, throughput and operational tradeoffs</a><a href="#mental-model">Presentation mental model: three questions, five verbs</a><a href="#evidence">Pinned code, inspected tests and validation scope</a></nav></div><section id="summary"><h2>Start here: whose progress is being committed?</h2>
+ <p><strong>commitSync and commitAsync write the same kind of Kafka group-offset record.</strong> “Sync” changes how the caller waits and retries; it does not select a stronger server-side storage format. Neither method commits your database writes, Flink state or Spark output.</p>
+ <div class="table-scroll"><table><thead><tr><th>Runtime</th><th>Kafka source offset API</th><th>Recovery authority</th><th>What a successful offset commit does not prove</th></tr></thead><tbody><tr><td>Plain KafkaConsumer</td><td>commitSync or commitAsync, or auto commit</td><td>Committed group offsets, unless the application supplies another offset store</td><td>That the sink output and offset were atomic</td></tr><tr><td>Modern Flink KafkaSource</td><td>Optional commitAsync after checkpoint completion</td><td>Completed Flink checkpoint: source splits + operator state + sink recovery state</td><td>That a Kafka sink transaction has completed</td></tr><tr><td>Spark Structured Streaming Kafka source</td><td>Neither API for source progress</td><td>Spark checkpoint offsets/commit logs and state</td><td>Kafka group offsets are not its progress ledger</td></tr><tr><td>Legacy Spark direct Kafka DStreams</td><td>CanCommitOffsets.commitAsync queues a later Kafka commitAsync</td><td>Depends on selected strategy: Kafka commits, DStream checkpoint, or an external atomic store</td><td>That enqueueing completed a broker write or made output exactly-once</td></tr></tbody></table></div>
+ <figure class="diagram" id="offset-authority"><figcaption><h3>Three progress authorities, not three spellings of commit</h3><p>Solid arrows store recovery progress. The dashed Flink path publishes optional Kafka group offsets. Sink output durability is a separate concern in every row.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-authority.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-authority.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Three progress authorities, not three spellings of commit"><img src="diagrams/offset-authority.svg" alt="Three progress authorities, not three spellings of commit. Solid arrows store recovery progress. The dashed Flink path publishes optional Kafka group offsets. Sink output durability is a separate concern in every row." loading="lazy"></div></figure><div class="refs">Source: <a class="cite" href="#ev-api-sync">api-sync</a> <a class="cite" href="#ev-api-async">api-async</a> <a class="cite" href="#ev-flink-client">flink-client</a> <a class="cite" href="#ev-flink-snapshot">flink-snapshot</a> <a class="cite" href="#ev-spark-noop">spark-noop</a> <a class="cite" href="#ev-spark-recovery">spark-recovery</a> <a class="cite" href="#ev-dstream-queue">dstream-queue</a></div>
+ <p>Scope: ordinary consumer-group offset commits, modern FLIP-27 KafkaSource, Spark’s default synchronous microbatch execution, and the separate legacy DStream API. Share-consumer record acknowledgements are a different protocol; see <a href="kafka-group-share-coordinators.html">group versus share coordinators</a>. Internal Kafka client versions bundled by Flink/Spark may differ from the Kafka source snapshot shown here.</p></section>
+<section id="positions"><h2>Four numbers that must not be confused</h2>
+ <div class="table-scroll"><table><thead><tr><th>Number</th><th>Meaning</th><th>Example for one partition</th></tr></thead><tbody><tr><td>Kafka log end / fetch visibility boundary</td><td>What the log contains, and what this isolation level can read; not application progress</td><td>Log end 200; read_committed may stop at an earlier stable boundary</td></tr><tr><td>Consumer position</td><td>Next fetch position after records returned by poll; records may still be unprocessed</td><td>poll returned through 149; position may be 150</td></tr><tr><td>Safe application frontier</td><td>Next position after the contiguous prefix whose required effects are safe</td><td>Only through 119 is safely processed: frontier 120</td></tr><tr><td>Durable restart progress</td><td>The last stored offset or engine checkpoint that recovery actually uses</td><td>Kafka group offset 100, or Flink checkpoint next offset 120</td></tr></tbody></table></div>
+ <p>Commit the <strong>next record to process</strong>, not the last processed record. For a fully handled batch, the pinned Kafka API recommends <code>ConsumerRecords.nextOffsets()</code>, which also carries leader epochs. Kafka offsets need not be consecutive: compaction, transactions and control batches can create gaps. Track the safe frontier in the delivered sequence, not an assumption that every integer is a user record.</p>
+ <figure class="diagram" id="offset-frontier"><figcaption><h3>Commit the safe frontier, not the furthest finished record</h3><p>Illustrative contiguous input offsets. 102 is unfinished, so the safe restart offset is 102 even though 103 and 104 finished. Real Kafka offsets can have gaps.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-frontier.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-frontier.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Commit the safe frontier, not the furthest finished record"><img src="diagrams/offset-frontier.svg" alt="Commit the safe frontier, not the furthest finished record. Illustrative contiguous input offsets. 102 is unfinished, so the safe restart offset is 102 even though 103 and 104 finished. Real Kafka offsets can have gaps." loading="lazy"></div></figure>
+ <p><code>commitSync()</code> with no map uses the consumer’s consumed positions. It does not wait for your worker pool, database futures or asynchronous sink writes. <code>commitAsync()</code> has the same limitation. Committing 150 while record 120 is still unfinished can skip 120 on restart.</p>
+ <p>An offset commit does not seek the current consumer, delete source records, acknowledge individual share records, or force an input-topic transaction to commit. <code>seek</code> changes the live position; OffsetCommit changes stored group progress. They solve different problems.</p><div class="refs">Source: <a class="cite" href="#ev-api-async">api-async</a> <a class="cite" href="#ev-classic-sync">classic-sync</a> <a class="cite" href="#ev-classic-async">classic-async</a> <a class="cite" href="#ev-coordinator-replay">coordinator-replay</a></div></section>
+<section id="sync-async"><h2>commitSync versus commitAsync: exact contract</h2>
+ <div class="table-scroll"><table><thead><tr><th>Concern</th><th>commitSync</th><th>commitAsync</th></tr></thead><tbody><tr><td>Caller waiting</td><td>Waits for success, a non-retriable failure, or timeout/interruption</td><td>Does not wait for the broker acknowledgement; reports completion through callback</td></tr><tr><td>Retries in inspected clients</td><td>Retries expected retriable failures within the API deadline</td><td>Does not automatically retry an errored explicit commit attempt</td></tr><tr><td>Result</td><td>Normal return means this commit succeeded; failure throws</td><td>Method return is not success; inspect callback exception</td></tr><tr><td>Server storage</td><td>OffsetCommit → group coordinator → replicated offsets log</td><td>Same RPC, validation and durable log</td></tr><tr><td>Ordering</td><td>Can be used as a bounded final progress checkpoint while ownership remains valid</td><td>Calls and their callbacks are ordered within the consumer API contract</td></tr><tr><td>Cost</td><td>Blocks the owner’s application work and next poll</td><td>Overlaps work with commit latency but still consumes broker, network and callback capacity</td></tr></tbody></table></div>
+ <figure class="diagram" id="offset-sync-async"><figcaption><h3>Same server acknowledgement, different caller waiting</h3><p>Two alternatives on one consumer owner thread. Async submission may reach the network before or after method return; this shows one possible schedule. Return is not a broker acknowledgement.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-sync-async.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-sync-async.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Same server acknowledgement, different caller waiting"><img src="diagrams/offset-sync-async.svg" alt="Same server acknowledgement, different caller waiting. Two alternatives on one consumer owner thread. Async submission may reach the network before or after method return; this shows one possible schedule. Return is not a broker acknowledgement." loading="lazy"></div></figure>
+ <p>“Async” is not “no local waiting of any kind.” The inspected <code>AsyncKafkaConsumer.commit</code> waits for <code>offsetsReady</code> so the network thread captures positions before subsequent fetch progress changes them. It also executes already queued callbacks. The promise is not to synchronously await this broker commit result.</p>
+ <details class="qa"><summary>Subtle version caveat: does commitSync drain all earlier callbacks?</summary><p>The pinned <code>commitAsync</code> Javadoc documents ordered invocations/callbacks and completion before a subsequent sync call returns. The pinned <code>commitSync</code> Javadoc separately qualifies the earlier-callback guarantee to the <code>consumer</code> group protocol. The newer delegate explicitly waits for <code>lastPendingAsyncCommit</code> and drains callbacks. The classic delegate also drains completed callbacks and has a pending-async path for empty maps, but do not turn this into a stronger cross-version guarantee than the API documents.</p><p>A timeout or other exceptional exit is not a successful drain. Nor does waiting for an earlier async attempt mean that attempt succeeded: its error still belongs to its callback. Inspect the exact client version and group protocol used by your application.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-api-order-caveat">api-order-caveat</a> <a class="cite" href="#ev-async-handoff">async-handoff</a> <a class="cite" href="#ev-async-sync">async-sync</a> <a class="cite" href="#ev-classic-sync">classic-sync</a> <a class="cite" href="#ev-commit-manager-sync">commit-manager-sync</a> <a class="cite" href="#ev-commit-manager-async">commit-manager-async</a> <a class="cite" href="#ev-test-async-no-retry">test-async-no-retry</a> <a class="cite" href="#ev-test-sync-retry">test-sync-retry</a> <a class="cite" href="#ev-test-async-drain">test-async-drain</a></div></section>
+<section id="threads"><h2>Which process, thread and module runs the work?</h2>
+ <p><code>AsyncKafkaConsumer</code> is a client implementation name selected by <code>group.protocol=consumer</code>; it supports <em>both</em> commit methods. <code>ClassicKafkaConsumer</code> supports both too. Choosing <code>commitAsync</code> does not switch delegates or spawn a pod.</p>
+ <figure class="diagram" id="offset-threads"><figcaption><h3>The word async appears at two different layers</h3><p>Both delegate implementations expose both APIs. Classic does not acquire a dedicated commit thread just because commitAsync is used. In the consumer-protocol delegate, network I/O is separated from user callback execution.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-threads.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-threads.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The word async appears at two different layers"><img src="diagrams/offset-threads.svg" alt="The word async appears at two different layers. Both delegate implementations expose both APIs. Classic does not acquire a dedicated commit thread just because commitAsync is used. In the consumer-protocol delegate, network I/O is separated from user callback execution." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Boundary</th><th>Code path</th><th>Ownership rule</th></tr></thead><tbody><tr><td>Classic application thread</td><td>KafkaConsumer → ClassicKafkaConsumer → ConsumerCoordinator → ConsumerNetworkClient</td><td>Ordinary API calls drive commit I/O/completion. The classic membership heartbeat thread is not a dedicated commit callback executor.</td></tr><tr><td>New consumer application thread</td><td>AsyncKafkaConsumer → application-event queue</td><td>Sync waits on a future; async queues callback delivery. KafkaConsumer remains a single-owner API.</td></tr><tr><td>New consumer network thread</td><td>ApplicationEventProcessor → CommitRequestManager → NetworkClientDelegate</td><td>Sends the OffsetCommit request and receives its result; queues user callback work.</td></tr><tr><td>User callback execution</td><td>OffsetCommitCallbackInvoker; classic completion queue</td><td>Runs on the consumer’s application thread during consumer operations. Keep callbacks short.</td></tr><tr><td>Flink TaskManager JVM</td><td>Source task/mailbox → split-fetcher task queue → KafkaPartitionSplitReader</td><td>The fetcher owns the source consumer. Do not call its commit methods concurrently from the mailbox.</td></tr><tr><td>Spark executor JVM</td><td>KafkaDataConsumer assign/seek/poll</td><td>Spark-selected offset ranges drive reads; there is no source group-offset commit to offload.</td></tr></tbody></table></div>
+ <p>On Kubernetes, a broker, JobManager, TaskManager, Spark driver or executor is commonly deployed as a separate process/pod. The boxes above are <strong>logical thread/module boundaries</strong>, not a required pod-per-box layout. Multiple source subtasks and operator chains can share a TaskManager JVM. Broker request handling, coordinator execution and storage callbacks share a broker process, with pools/queues between them.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-delegate">delegate</a> <a class="cite" href="#ev-network-event">network-event</a> <a class="cite" href="#ev-callback-thread">callback-thread</a> <a class="cite" href="#ev-classic-callback">classic-callback</a> <a class="cite" href="#ev-flink-fetcher">flink-fetcher</a> <a class="cite" href="#ev-spark-fetch">spark-fetch</a></div></section>
+<section id="wire"><h2>Follow one OffsetCommit through the distributed cluster</h2>
+ <p>Suppose group <code>payments</code> consumes <code>orders-0</code> led by broker B1, but its <code>__consumer_offsets</code> partition is led by B2. Fetch goes to B1; OffsetCommit goes to B2. B2 is the group coordinator for this group because it leads the backing offsets partition. If B1 and B2 happen to be the same broker, these remain different logical operations.</p>
+ <figure class="diagram" id="offset-rpc"><figcaption><h3>The commit goes to the coordinator, not every input leader</h3><p>Illustrative RF=3 offsets partition. Follower Fetch replication advances the high watermark. Broker role placement is independent of which broker leads the input data partition.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-rpc.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-rpc.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The commit goes to the coordinator, not every input leader"><img src="diagrams/offset-rpc.svg" alt="The commit goes to the coordinator, not every input leader. Illustrative RF=3 offsets partition. Follower Fetch replication advances the high watermark. Broker role placement is independent of which broker leads the input data partition." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Wire field / response</th><th>Meaning</th></tr></thead><tbody><tr><td>API key 8: OffsetCommit</td><td>Same Kafka binary request over the broker listener’s TCP/TLS connection for both Java methods; not gRPC and not a controller RPC.</td></tr><tr><td>GroupId + MemberId + GenerationIdOrMemberEpoch</td><td>Group identity and ownership validation; classic generation versus consumer-protocol member epoch. Manual assignment does not imply ordinary membership/rebalance fencing.</td></tr><tr><td>GroupInstanceId</td><td>Optional static membership identity in supported versions.</td></tr><tr><td>Topic + PartitionIndex + CommittedOffset</td><td>The topic-partition resume point. Names through v9; IDs in v10 at this source pin.</td></tr><tr><td>CommittedLeaderEpoch + CommittedMetadata</td><td>Input-partition epoch metadata and optional user metadata; this epoch is not the consumer member epoch.</td></tr><tr><td>Response throttle time + partition ErrorCode</td><td>Each partition reports an outcome. A multi-partition request is not an atomic sink transaction; validation may reject some partitions and accept others.</td></tr></tbody></table></div>
+ <p>Broker flow: <code>KafkaApis.handleOffsetCommitRequest</code> authorizes and validates → <code>GroupCoordinatorService.commitOffsets</code> schedules a write keyed by the group’s backing partition → <code>OffsetMetadataManager.commitOffset</code> creates records → coordinator runtime appends them → replication advances the internal partition’s high watermark → deferred response completes.</p>
+ <p>The durable key is the group/topic/partition offset key, and the value includes the committed next offset and metadata. The in-memory coordinator view is reconstructed by replay; it is not the durability boundary. Normal offset writes are not stored in KRaft’s cluster metadata log. KRaft records leadership and cluster metadata, while the offset topic replicates through broker partition replication.</p>
+ <p>A successful commit is replication-backed, not a promise of one physical <code>fsync</code> per API call. Resilience still depends on replicas, ISR/min-ISR policy, eligible leadership, disk survival and clean recovery. Unavailable sufficient replicas can reject or delay writes; choosing async cannot fix that. See <a href="kafka-leadership-metadata.html">leadership and metadata failure recovery</a> and the <a href="kafka-rpc-atlas.html">complete versioned RPC schemas</a>.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-wire-request">wire-request</a> <a class="cite" href="#ev-wire-response">wire-response</a> <a class="cite" href="#ev-broker-commit">broker-commit</a> <a class="cite" href="#ev-coordinator-commit">coordinator-commit</a> <a class="cite" href="#ev-coordinator-record">coordinator-record</a> <a class="cite" href="#ev-coordinator-replay">coordinator-replay</a> <a class="cite" href="#ev-coordinator-hw">coordinator-hw</a></div></section>
+<section id="failure"><h2>Failure windows and the stale retry trap</h2>
+ <figure class="diagram" id="offset-stale-retry"><figcaption><h3>Why retrying an old callback payload is unsafe</h3><p>This is a new application retry after a newer request—not Kafka reordering the original calls. Assume unchanged valid ownership; both writes are accepted.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-stale-retry.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-stale-retry.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Why retrying an old callback payload is unsafe"><img src="diagrams/offset-stale-retry.svg" alt="Why retrying an old callback payload is unsafe. This is a new application retry after a newer request—not Kafka reordering the original calls. Assume unchanged valid ownership; both writes are accepted." loading="lazy"></div></figure>
+ <p>The coordinator stores accepted updates in log order; it is not a compare-and-set on the largest offset. A deliberate rewind can be valid. Therefore the client/application must not submit an obsolete retry after a newer frontier. The sequence above does not contradict FIFO callback ordering: the old retry is a <em>new</em> later invocation.</p>
+ <div class="table-scroll"><table><thead><tr><th>Failure window</th><th>What can be true</th><th>Recovery / safe response</th></tr></thead><tbody><tr><td>Output succeeded, process dies before offset commit</td><td>Sink contains effects; Kafka still holds an older restart offset</td><td>Replay is expected. Use idempotent output or an atomic output+progress design.</td></tr><tr><td>Offset committed before output finishes</td><td>Restart skips records whose effects were not durable</td><td>Data can be lost from the application result. Waiting with commitSync does not repair the wrong order.</td></tr><tr><td>Coordinator appended/replicated but response is lost</td><td>Client sees timeout/disconnect although the offset may be durable</td><td>Outcome is uncertain, not proven rollback. Re-establish ownership and use a current safe frontier.</td></tr><tr><td>Coordinator broker fails before replication completes</td><td>A speculative append may not survive failover</td><td>New offsets leader loads committed state; retry/rediscover within valid ownership.</td></tr><tr><td>NOT_COORDINATOR / loading / unavailable</td><td>Cached coordinator may be stale or its shard not ready</td><td>Rediscovery and bounded retry. Sync handles retriable failures; async exposes its failed attempt.</td></tr><tr><td>Rebalance / stale member / fenced static instance</td><td>This consumer may no longer own the partitions</td><td>Do not blindly loop on the old map. Resolve assignment; stop the fenced instance.</td></tr><tr><td>Mixed partition errors</td><td>Some offsets can have succeeded even though the API reports an exception</td><td>Do not assume all-or-nothing. Track safe progress per partition.</td></tr><tr><td>Commit callback never observed before process death</td><td>Async call returned but result was not observed</td><td>Restore from durable progress, not the application’s last submitted request.</td></tr><tr><td>Source data expires before replay</td><td>A saved offset cannot recreate deleted Kafka records</td><td>Retention must cover outage/recovery lag. Fail or reset according to policy; neither commit method restores missing data.</td></tr><tr><td>Stored group offset expires or a fresh group is used</td><td>No committed Kafka resume point exists</td><td>Plain consumers need explicit starting/reset policy. Engine checkpoints are separate, but still need retained source data.</td></tr></tbody></table></div>
+ <p>For manually assigned consumers, a shared <code>group.id</code> is not an application-wide lock: independent clients can overwrite each other’s offsets. For subscribe-based consumers, distinguish a recoverable coordinator move from a membership error. On partition revocation, commit only a known-safe frontier while ownership permits it; after partitions are lost, do not assume you can commit them.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-coordinator-replay">coordinator-replay</a> <a class="cite" href="#ev-commit-manager-sync">commit-manager-sync</a> <a class="cite" href="#ev-commit-manager-async">commit-manager-async</a> <a class="cite" href="#ev-broker-commit">broker-commit</a> <a class="cite" href="#ev-wire-response">wire-response</a></div></section>
+<section id="examples"><h2>Plain Java consumer: correct order before API choice</h2>
+ <p>Illustrative Java sketch for the pinned API; imports/setup and shutdown/error policy omitted. It assumes <code>enable.auto.commit=false</code>, one consumer owner thread, sequential batch processing, and a sink function that returns only when the whole batch’s required effects are durable. These snippets were not compiled or executed.</p>
+ <pre class="guide-pre"><code>ConsumerRecords&lt;String, String&gt; records = consumer.poll(Duration.ofMillis(250));
+writeBatchAndWaitForDurability(records);
+consumer.commitSync(records.nextOffsets(), Duration.ofSeconds(5));</code></pre>
+ <p>This is at-least-once output under a crash between sink success and commit success. To overlap commit latency, change the last line—not the safe frontier:</p>
+ <pre class="guide-pre"><code>Map&lt;TopicPartition, OffsetAndMetadata&gt; safe = Map.copyOf(records.nextOffsets());
+consumer.commitAsync(safe, (attempted, error) -&gt; {
+    if (error != null) {
+        recordCommitFailure(attempted, error);
+    }
+});</code></pre>
+ <p>Continue driving the consumer API so callbacks execute. Publish the next <em>current safe</em> frontier under a bounded policy; do not recursively retry the callback’s stale <code>attempted</code> map. Treat fatal authorization/fencing failures explicitly. A graceful final <code>commitSync(currentSafe, timeout)</code> can reduce duplicate replay, but only while ownership remains valid, and it cannot protect a hard crash.</p>
+ <details class="qa"><summary>What changes with a worker pool?</summary><p>Retain a per-partition ordered completion tracker. Dispatch work while maintaining consumer ownership on one thread; pause partitions if necessary to bound unfinished work, continue required polling, and advance the commit frontier only over work known complete. A completion at offset 104 cannot cover an unfinished 102. A queue of “largest finished offset” values is not sufficient. On rebalance, stop accepting work for revoked partitions and prevent late workers from advancing an obsolete ownership epoch.</p><p>Use Kafka producer transactions for Kafka-to-Kafka atomic output+offset commits through <code>sendOffsetsToTransaction</code>, not either ordinary consumer commit API. An external database instead needs its own atomic offset+output transaction, idempotency or another compatible recovery protocol.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-api-async">api-async</a> <a class="cite" href="#ev-callback-thread">callback-thread</a> <a class="cite" href="#ev-api-order-caveat">api-order-caveat</a> <a class="cite" href="#ev-coordinator-replay">coordinator-replay</a></div></section>
+<section id="flink"><h2>Flink: checkpoint authority, async offset publication</h2>
+ <figure class="diagram" id="offset-flink"><figcaption><h3>Flink checkpoint completion fans out to two different commits</h3><p>TaskManager source mailbox and fetcher are threads in a JVM, not separate pods. The sink committer may be in another task/JVM. This is a logical flow, not a total ordering between source-offset and sink-transaction completion.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-flink.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-flink.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Flink checkpoint completion fans out to two different commits"><img src="diagrams/offset-flink.svg" alt="Flink checkpoint completion fans out to two different commits. TaskManager source mailbox and fetcher are threads in a JVM, not separate pods. The sink committer may be in another task/JVM. This is a logical flow, not a total ordering between source-offset and sink-transaction completion." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Step</th><th>Code / thread</th><th>Meaning</th></tr></thead><tbody><tr><td>1. Read and emit</td><td>KafkaPartitionSplitReader fetcher → source mailbox → KafkaRecordEmitter</td><td>A prefetched record is not yet a checkpointed source offset. Emitter advances split state after deserialization/emission.</td></tr><tr><td>2. Snapshot checkpoint 42</td><td>KafkaSourceReader.snapshotState(42), source task</td><td>Save split next-offsets. Also keep offsetsToCommit[42] if enabled. Do not use the consumer’s latest fetched position.</td></tr><tr><td>3. Complete the global checkpoint</td><td>Flink checkpoint lifecycle</td><td>Recovery state and completion metadata become authoritative after the required tasks acknowledge. An individual source snapshot alone is not global completion.</td></tr><tr><td>4. Notify source completion</td><td>KafkaSourceReader.notifyCheckpointComplete(42)</td><td>Select exactly the saved map for checkpoint 42; absent/empty maps are handled without inventing offsets.</td></tr><tr><td>5. Submit commit work</td><td>KafkaSourceFetcherManager.enqueueOffsetsCommitTask</td><td>Marshal access to the fetcher-owned Kafka consumer; create a fetcher if the old one has ended.</td></tr><tr><td>6. Call Kafka</td><td>KafkaPartitionSplitReader.notifyCheckpointComplete → consumer.commitAsync</td><td>Send ordinary OffsetCommit; record callback success/failure metrics and prune bookkeeping on success.</td></tr><tr><td>7. Restore</td><td>Checkpoint split offsets → assign/seek</td><td>Recovery uses saved next-offsets even if the Kafka group commit never succeeded.</td></tr></tbody></table></div>
+ <p>Worked example: checkpoint 42 contains source next offset 120. The source has since fetched up to 200 and emitted up to 179. Its checkpoint-42 Kafka commit must publish 120, not 180 or 200. If the task fails and checkpoint 42 is the recovery point, it resumes from 120 with matching operator state. Alignment/channel-state handling belongs to the Flink checkpoint protocol, not this consumer offset call.</p>
+ <p><strong>Failure of this Kafka offset commit does not invalidate the completed Flink checkpoint.</strong> The connector logs and counts callback errors. Pending bookkeeping can remain until a later successful completion subsumes it. Do not describe that as an infinite automatic retry of the exact same failed request.</p>
+ <p>Configuration: <code>commit.offsets.on.checkpoint</code> defaults true; the builder defaults it false when <code>group.id</code> is absent. Kafka auto commit defaults false here, but the builder’s conditional override allows explicit configuration—so “Flink always forces auto commit off” would be too strong. With checkpointing enabled, keep source progress publication tied to completed checkpoints rather than Kafka’s poll-based auto-commit clock. Without completed checkpoints there are no checkpoint-completion notifications to publish.</p>
+ <p>Fresh bootstrap may use an <code>OffsetsInitializer.committedOffsets</code> policy. That does not make Kafka group offsets authoritative when restoring an existing checkpoint/savepoint. Flink owns split assignment; a source consumer’s group ID does not make the Kafka group coordinator schedule Flink subtasks.</p>
+ <details class="qa"><summary>Source commit versus exactly-once Kafka sink commit</summary><p>The source calls <code>KafkaConsumer.commitAsync</code> for ordinary group progress. The exactly-once sink’s <code>KafkaCommitter</code> calls <code>KafkaProducer.commitTransaction</code> for transactional output. They can target different coordinator brokers and complete at different times. There is no single Kafka transaction joining these ordinary source offsets to the output in this connector path.</p><p>Flink’s completed checkpoint and recoverable sink committables connect input replay, operator state and sink finalization. A failed source offset publication is monitoring/bookkeeping loss; a sink transaction that cannot be finalized is a sink correctness/recovery problem with separate handling. See <a href="flink-state-checkpoint-recovery.html">checkpoint recovery</a> and <a href="kafka-transaction-marker-recovery.html">transaction marker recovery</a>.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-flink-emitter">flink-emitter</a> <a class="cite" href="#ev-flink-snapshot">flink-snapshot</a> <a class="cite" href="#ev-flink-notify">flink-notify</a> <a class="cite" href="#ev-flink-fetcher">flink-fetcher</a> <a class="cite" href="#ev-flink-client">flink-client</a> <a class="cite" href="#ev-flink-commit-failure">flink-commit-failure</a> <a class="cite" href="#ev-flink-seek">flink-seek</a> <a class="cite" href="#ev-flink-defaults">flink-defaults</a> <a class="cite" href="#ev-flink-options">flink-options</a> <a class="cite" href="#ev-flink-sink">flink-sink</a> <a class="cite" href="#ev-test-flink-complete">test-flink-complete</a> <a class="cite" href="#ev-test-flink-disable">test-flink-disable</a></div></section>
+<section id="spark"><h2>Spark Structured Streaming: commit logs, not consumer commits</h2>
+ <p>For the built-in Kafka source, the answer to “does Spark use commitSync or commitAsync?” is <strong>neither for source progress</strong>. <code>KafkaSourceProvider</code> disables auto commit on its consumers and rejects the user option. <code>KafkaMicroBatchStream.commit(end)</code> is empty. The word <code>commit</code> in Spark is not evidence of an OffsetCommit RPC.</p>
+ <figure class="diagram" id="offset-spark"><figcaption><h3>Spark Structured Streaming: checkpoint logs drive restart</h3><p>Default synchronous microbatch path. Async progress tracking, continuous processing and RealTimeTrigger have different timing and are outside this sequence. There is no input OffsetCommit RPC in this flow.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-spark.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-spark.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Spark Structured Streaming: checkpoint logs drive restart"><img src="diagrams/offset-spark.svg" alt="Spark Structured Streaming: checkpoint logs drive restart. Default synchronous microbatch path. Async progress tracking, continuous processing and RealTimeTrigger have different timing and are outside this sequence. There is no input OffsetCommit RPC in this flow." loading="lazy"></div></figure>
+ <div class="table-scroll"><table><thead><tr><th>Artifact or method</th><th>Meaning</th><th>Crash implication</th></tr></thead><tbody><tr><td>checkpoint/offsets/42</td><td>Chosen end-offset vector for microbatch 42</td><td>Defines replayable input range, not proof that output completed</td></tr><tr><td>Executor KafkaDataConsumer</td><td>Assigns/seeks/fetches the range planned by the driver</td><td>Task retry can reread input; no executor source offset commit is needed</td></tr><tr><td>Sink write / writer commit</td><td>Sink-specific successful batch output</td><td>External effects may already exist before the driver writes its completion log</td></tr><tr><td>checkpoint/commits/42</td><td>Batch completion metadata, including relevant state checkpoint information</td><td>Recovery can advance past batch 42 if its offset/commit records agree</td></tr><tr><td>checkpoint/state/...</td><td>Stateful operator recovery data when applicable</td><td>A source offset by itself cannot reconstruct aggregation state without replay/state recovery</td></tr><tr><td>KafkaMicroBatchStream.commit(end)</td><td>No-op source lifecycle hook</td><td>Does not update __consumer_offsets</td></tr></tbody></table></div>
+ <p>Example: offsets/42 defines <code>[120,180)</code>. If the driver dies after output is written but before commits/42 is durable, recovery sees planned input without a matching completion and re-executes that batch. If commits/42 is durable, recovery advances. The sink must make repeated execution safe if you need exactly-once results.</p>
+ <p>The built-in Kafka sink’s <code>KafkaDataWriter.commit</code> flushes producer sends and checks errors. It does not atomically commit source offsets with those writes. Spark’s Kafka sink is at-least-once across query/task retries; producer idempotence does not deduplicate arbitrary application replay across new producer sessions. For <code>foreachBatch</code>, a durable batch-ID/output deduplication or sink transaction scheme is the application’s responsibility.</p>
+ <p>A configured <code>kafka.group.id</code> therefore does not turn consumer-group lag into Spark’s query progress. Use query start/end offsets, input/processing rates, batch duration and checkpoint status. Restart using the same valid checkpoint resumes its recorded progress; deleting it and setting startingOffsets is a new bootstrap decision, not normal failure recovery.</p>
+ <p>Scope caveat from the inspected source: <code>RealTimeTrigger</code> delays offset logging until batch end, and async progress tracking has its own implementation. The sequence above deliberately describes the ordinary synchronous microbatch path. Neither “asynchronous progress tracking” nor a generic Spark writer <code>commit()</code> should be confused with Kafka consumer <code>commitAsync</code>.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-spark-config">spark-config</a> <a class="cite" href="#ev-spark-noop">spark-noop</a> <a class="cite" href="#ev-spark-fetch">spark-fetch</a> <a class="cite" href="#ev-spark-start">spark-start</a> <a class="cite" href="#ev-spark-output-order">spark-output-order</a> <a class="cite" href="#ev-spark-end">spark-end</a> <a class="cite" href="#ev-spark-recovery">spark-recovery</a> <a class="cite" href="#ev-spark-source-commit">spark-source-commit</a> <a class="cite" href="#ev-spark-sink">spark-sink</a> <a class="cite" href="#ev-spark-doc">spark-doc</a> <a class="cite" href="#ev-test-spark-config">test-spark-config</a> <a class="cite" href="#ev-test-spark-log">test-spark-log</a></div></section>
+<section id="dstreams"><h2>Legacy Spark DStreams: the exception you may remember</h2>
+ <figure class="diagram" id="offset-dstream"><figcaption><h3>Legacy DStreams: commitAsync first means enqueue</h3><p>Call on the original DirectKafkaInputDStream, after the output action succeeds. Queue coalescing uses max(untilOffset) only for submitted completed work; it cannot detect holes caused by out-of-order batch completion.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/offset-dstream.svg" target="_blank">Full-size SVG</a><a href="diagrams/offset-dstream.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Legacy DStreams: commitAsync first means enqueue"><img src="diagrams/offset-dstream.svg" alt="Legacy DStreams: commitAsync first means enqueue. Call on the original DirectKafkaInputDStream, after the output action succeeds. Queue coalescing uses max(untilOffset) only for submitted completed work; it cannot detect holes caused by out-of-order batch completion." loading="lazy"></div></figure>
+ <p>The older <code>org.apache.spark.streaming.kafka010</code> integration exposes <code>CanCommitOffsets</code> on the original direct stream. Its <code>commitAsync</code> is thread-safe because it enqueues offset ranges; that does not make the underlying KafkaConsumer thread-safe.</p>
+ <p>The driver’s later <code>DirectKafkaInputDStream.compute</code> calls <code>commitAll</code>. This drains the queue, takes the maximum exclusive <code>untilOffset</code> per partition in that drain, and invokes the driver Kafka consumer’s <code>commitAsync</code>. Only the most recently supplied callback is retained. Enqueueing is therefore neither a broker acknowledgement nor a one-callback-per-enqueue guarantee.</p>
+ <pre class="guide-pre"><code>stream.foreachRDD { rdd =&gt;
+  val ranges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+  writeOutputAndWait(rdd)
+  stream.asInstanceOf[CanCommitOffsets].commitAsync(ranges)
+}</code></pre>
+ <p>Illustrative Scala sketch, not executed. Capture ranges from the original Kafka RDD before transformations that remove <code>HasOffsetRanges</code>. Disable auto commit. Call after output durability, not after merely constructing a lazy transformation. A crash after output and before durable commit still replays, so the sink must tolerate duplicates. Out-of-order asynchronous output completion also needs a contiguous-batch frontier: coalescing max(untilOffset) cannot detect unfinished earlier output.</p>
+ <p>Legacy DStreams support more than one recovery strategy. If you select Kafka offsets, they supply restart progress; if you restore a DStream checkpoint or store offsets atomically with output elsewhere, that strategy controls recovery. Do not carry a blanket “Spark commits to Kafka” statement into a Structured Streaming presentation.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-dstream-queue">dstream-queue</a> <a class="cite" href="#ev-dstream-drain">dstream-drain</a> <a class="cite" href="#ev-dstream-compute">dstream-compute</a> <a class="cite" href="#ev-test-dstream">test-dstream</a></div></section>
+<section id="tradeoffs"><h2>Latency, throughput and operational tradeoffs</h2>
+ <div class="table-scroll"><table><thead><tr><th>Choice</th><th>Benefit</th><th>Cost / boundary</th></tr></thead><tbody><tr><td>Sync commit every batch</td><td>Simple sequential control flow and explicit completion</td><td>Adds commit round-trip/replication/queueing delay to the owner’s processing cycle; long stalls affect polling liveness</td></tr><tr><td>Async periodic commit</td><td>Overlaps useful work with offset-write latency</td><td>More uncommitted progress at crash, callback/error bookkeeping, and no sink atomicity</td></tr><tr><td>Larger commit interval</td><td>Fewer coordinator writes and callbacks</td><td>Larger duplicate replay window and slower Kafka group progress visibility</td></tr><tr><td>Smaller Flink checkpoint interval</td><td>Fresher coordinated recovery points and potentially earlier transactional sink visibility</td><td>More state snapshots, checkpoint storage traffic, coordinator work and transaction overhead</td></tr><tr><td>Larger Spark microbatch</td><td>Amortizes scheduling and checkpoint-log overhead</td><td>More end-to-end waiting and a larger batch to replay after failure</td></tr><tr><td>More partitions/parallel tasks</td><td>More processing and source bandwidth capacity</td><td>More per-partition state, connections/requests, checkpoint metadata and coordination overhead</td></tr><tr><td>More replicas / stricter durability policy</td><td>Better resilience to specified failures</td><td>More replication traffic and potential write unavailability when required replicas are absent</td></tr></tbody></table></div>
+ <p>Back-of-envelope only: for a sequential batch with useful work time P and commit wait C, a sync-commit loop needs roughly P+C plus fetch/scheduling overhead. Async can overlap C with later work, but does not remove C from broker completion latency. If records arrive at rate r and durable progress lags by T seconds, roughly r×T records may be candidates for replay; multi-partition skew, checkpoint duration and failures change the actual number. These are reasoning aids, not measured benchmarks.</p>
+ <p>Separate three latency questions in a presentation: when was output first written, when was output safely visible to the intended reader, and when was the recovery point durable? Kafka group committed lag, Flink checkpoint age, Spark batch completion and Kafka transactional visibility answer different questions.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-classic-sync">classic-sync</a> <a class="cite" href="#ev-commit-manager-async">commit-manager-async</a> <a class="cite" href="#ev-flink-notify">flink-notify</a> <a class="cite" href="#ev-spark-start">spark-start</a> <a class="cite" href="#ev-spark-end">spark-end</a></div></section>
+<section id="mental-model"><h2>Presentation mental model: three questions, five verbs</h2>
+ <p><strong>Ask: who owns the work, where is progress durable, and what happens if the acknowledgement is lost?</strong></p>
+ <div class="table-scroll"><table><thead><tr><th>Verb</th><th>Remember it as</th></tr></thead><tbody><tr><td>poll / fetch</td><td>Move data into the runtime; not proof of completed output</td></tr><tr><td>seek</td><td>Move this consumer’s live read position</td></tr><tr><td>commitSync / commitAsync</td><td>Publish Kafka group restart progress; wait now versus learn later</td></tr><tr><td>Flink checkpoint / Spark checkpoint logs</td><td>Persist the engine’s coordinated recovery knowledge</td></tr><tr><td>commitTransaction / sink commit</td><td>Finalize output under that sink’s protocol; not automatically the same as source progress</td></tr></tbody></table></div>
+ <p>Thirty-second version: “Both Kafka commit methods write the same replicated bookmark. Sync waits; async reports later. Flink’s real bookmark lives in its checkpoint and it optionally mirrors source offsets to Kafka with commitAsync. Spark Structured Streaming keeps progress in its own offset and commit logs, not Kafka consumer commits. Legacy Spark DStreams can queue Kafka commits. Exactly-once is about coordinating output with recovery progress, not choosing the method with ‘Sync’ in its name.”</p>
+ <details class="qa"><summary>What evidence was verified, and what was not?</summary><p>The appendix links exact repository revisions, methods and inspected test bodies. The documentation build checks that evidence needles exist at those revisions, Mermaid renders, labels do not geometrically overlap, links resolve, and desktop/mobile layouts work. Kafka, Flink and Spark engine tests, the snippets, performance benchmarks and live broker/pod fault injection were <strong>not run</strong>. The failure matrix describes consequences derived from the code and protocol, not newly measured failure experiments.</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-api-sync">api-sync</a> <a class="cite" href="#ev-api-async">api-async</a> <a class="cite" href="#ev-flink-snapshot">flink-snapshot</a> <a class="cite" href="#ev-spark-recovery">spark-recovery</a> <a class="cite" href="#ev-dstream-queue">dstream-queue</a></div></section>
+<section id="evidence"><h2>Pinned code, inspected tests and validation scope</h2><p>Pinned source snapshots: <a href="https://github.com/apache/kafka/tree/d2da6a18f839ce8b2eeb4db8e7515200258b0f81">Kafka d2da6a18f839</a> · <a href="https://github.com/apache/flink-connector-kafka/tree/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b">flink-connector-kafka ae656dd6fe23</a> · <a href="https://github.com/apache/spark/tree/f9358a5587a2d512c5cf08ba4b10d60007c93f6e">spark f9358a5587a2</a>.</p><p>Engine tests, snippets, benchmarks and live fault injection were not run. Test bodies were inspected as source evidence. Component placements, offsets and crash timelines are illustrative. Apache source excerpts are licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p><details class="code" id="ev-api-sync"><summary>api-sync · KafkaConsumer.java:964</summary><p>Public sync API delegates to the selected consumer implementation. Read its preceding timeout and callback contract.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L964">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java</a></p><pre class="guide-pre"><code>964      public void commitSync() {
+965          delegate.commitSync();
+966      }
+967
+968      /**
+969       * Commit offsets returned on the last {@link #poll(Duration) poll()} for all the subscribed list of topics and
+970       * partitions.
+971       * &lt;p&gt;
+972       * This commits offsets only to Kafka. The offsets committed using this API will be used on the first fetch after
+973       * every rebalance and also on startup. As such, if you need to store offsets in anything other than Kafka, this API
+974       * should not be used.
+975       * &lt;p&gt;
+976       * This is a synchronous commit and will block until either the commit succeeds, an unrecoverable error is
+977       * encountered (in which case it is thrown to the caller), or the passed timeout expires.
+978       * &lt;p&gt;
+979       * Note that asynchronous offset commits sent previously with the {@link #commitAsync(OffsetCommitCallback)}
+980       * (or similar) are guaranteed to have their callbacks invoked prior to completion of this method,
+981       * but only when the consumer is using the consumer group protocol.
+982       *
+983       * @throws org.apache.kafka.clients.consumer.CommitFailedException if the commit failed and cannot be retried.
+984       *             This can only occur if you are using automatic group management with {@link #subscribe(Collection)},
+985       *             or if there is an active group with the same &lt;code&gt;group.id&lt;/code&gt; which is using group management. In such cases,
+986       *             when you are trying to commit to partitions that are no longer assigned to this consumer because the
+987       *             consumer is for example no longer part of the group this exception would be thrown.
+988       * @throws org.apache.kafka.common.errors.RebalanceInProgressException if the consumer instance is in the middle of a rebalance
+989       *            so it is not yet determined which partitions would be assigned to the consumer. In such cases you can first
+990       *            complete the rebalance by calling {@link #poll(Duration)} and commit can be reconsidered afterwards.
+991       *            NOTE when you reconsider committing after the rebalance, the assigned partitions may have changed,</code></pre></details>
+<details class="code" id="ev-api-async"><summary>api-async · KafkaConsumer.java:1183</summary><p>Explicit offsets are copied. The preceding contract documents ordered async requests/callbacks and next-offset semantics.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L1183">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java</a></p><pre class="guide-pre"><code>1183      public void commitAsync(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets, OffsetCommitCallback callback) {
+1184          delegate.commitAsync(offsets, callback);
+1185      }
+1186
+1187      /**
+1188       * Overrides the fetch offsets that the consumer will use on the next {@link #poll(Duration) poll(timeout)}. If this API
+1189       * is invoked for the same partition more than once, the latest offset will be used on the next poll(). Note that
+1190       * you may lose data if this API is arbitrarily used in the middle of consumption, to reset the fetch offsets
+1191       * &lt;p&gt;
+1192       * The next Consumer Record which will be retrieved when poll() is invoked will have the offset specified, given that
+1193       * a record with that offset exists (i.e. it is a valid offset).
+1194       * &lt;p&gt;
+1195       * {@link #seekToBeginning(Collection)} will go to the first offset in the topic.
+1196       * seek(0) is equivalent to seekToBeginning for a TopicPartition with beginning offset 0,
+1197       * assuming that there is a record at offset 0 still available.
+1198       * {@link #seekToEnd(Collection)} is equivalent to seeking to the last offset of the partition, but behavior depends on
+1199       * {@code isolation.level}, so see {@link #seekToEnd(Collection)} documentation for more details.
+1200       * &lt;p&gt;
+1201       * Seeking to the offset smaller than the log start offset or larger than the log end offset
+1202       * means an invalid offset is reached.
+1203       * Invalid offset behaviour is controlled by the {@code auto.offset.reset} property.
+1204       * If this is set to &quot;earliest&quot;, the next poll will return records from the starting offset.
+1205       * If it is set to &quot;latest&quot;, it will seek to the last offset (similar to seekToEnd()).
+1206       * If it is set to &quot;none&quot;, an {@code OffsetOutOfRangeException} will be thrown.
+1207       * &lt;p&gt;
+1208       * Note that, the seek offset won't change to the in-flight fetch request, it will take effect in next fetch request.
+1209       * So, the consumer might wait for {@code fetch.max.wait.ms} before starting to fetch the records from desired offset.
+1210       *</code></pre></details>
+<details class="code" id="ev-api-order-caveat"><summary>api-order-caveat · KafkaConsumer.java:936</summary><p>The pinned commitSync Javadoc qualifies its prior-async-callback guarantee by group protocol; do not erase this version-specific caveat.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java#L936">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/KafkaConsumer.java</a></p><pre class="guide-pre"><code>936       * but only when the consumer is using the consumer group protocol.
+937       *
+938       * @throws org.apache.kafka.clients.consumer.CommitFailedException if the commit failed and cannot be retried.
+939       *             This fatal error can only occur if you are using automatic group management with {@link #subscribe(Collection)},
+940       *             or if there is an active group with the same &lt;code&gt;group.id&lt;/code&gt; which is using group management. In such cases,
+941       *             when you are trying to commit to partitions that are no longer assigned to this consumer because the
+942       *             consumer is for example no longer part of the group this exception would be thrown.
+943       * @throws org.apache.kafka.common.errors.RebalanceInProgressException if the consumer instance is in the middle of a rebalance
+944       *            so it is not yet determined which partitions would be assigned to the consumer. In such cases you can first
+945       *            complete the rebalance by calling {@link #poll(Duration)} and commit can be reconsidered afterwards.
+946       *            NOTE when you reconsider committing after the rebalance, the assigned partitions may have changed,
+947       *            and also for those partitions that are still assigned their fetch positions may have changed too
+948       *            if more records are returned from the {@link #poll(Duration)} call.
+949       * @throws org.apache.kafka.common.errors.WakeupException if {@link #wakeup()} is called before or while this
+950       *             function is called
+951       * @throws org.apache.kafka.common.errors.InterruptException if the calling thread is interrupted before or while
+952       *             this function is called
+953       * @throws org.apache.kafka.common.errors.AuthenticationException if authentication fails. See the exception for more details
+954       * @throws org.apache.kafka.common.errors.AuthorizationException if not authorized to the topic or to the
+955       *             configured groupId. See the exception for more details
+956       * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. if offset metadata
+957       *             is too large or if the topic does not exist).
+958       * @throws org.apache.kafka.common.errors.TimeoutException if the timeout specified by {@code default.api.timeout.ms} expires
+959       *            before successful completion of the offset commit
+960       * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer is using the classic group protocol
+961       *            and this instance gets fenced by broker.
+962       */
+963      @Override</code></pre></details>
+<details class="code" id="ev-delegate"><summary>delegate · ConsumerDelegateCreator.java:61</summary><p>group.protocol selects ClassicKafkaConsumer or AsyncKafkaConsumer, independently of the commit method name.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java#L61">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java</a></p><pre class="guide-pre"><code>61              GroupProtocol groupProtocol = GroupProtocol.valueOf(config.getString(ConsumerConfig.GROUP_PROTOCOL_CONFIG).toUpperCase(Locale.ROOT));
+62
+63              if (groupProtocol == GroupProtocol.CONSUMER)
+64                  return new AsyncKafkaConsumer&lt;&gt;(config, keyDeserializer, valueDeserializer, Optional.empty());
+65              else
+66                  return new ClassicKafkaConsumer&lt;&gt;(config, keyDeserializer, valueDeserializer);
+67          } catch (KafkaException e) {
+68              throw e;
+69          } catch (Throwable t) {
+70              throw new KafkaException(&quot;Failed to construct Kafka consumer&quot;, t);
+71          }
+72      }
+73
+74      public &lt;K, V&gt; ConsumerDelegate&lt;K, V&gt; create(LogContext logContext,
+75                                                  Time time,
+76                                                  ConsumerConfig config,
+77                                                  Deserializer&lt;K&gt; keyDeserializer,
+78                                                  Deserializer&lt;V&gt; valueDeserializer,
+79                                                  KafkaClient client,
+80                                                  SubscriptionState subscriptions,
+81                                                  ConsumerMetadata metadata,
+82                                                  List&lt;ConsumerPartitionAssignor&gt; assignors) {
+83          try {
+84              GroupProtocol groupProtocol = GroupProtocol.valueOf(config.getString(ConsumerConfig.GROUP_PROTOCOL_CONFIG).toUpperCase(Locale.ROOT));
+85
+86              if (groupProtocol == GroupProtocol.CONSUMER)
+87                  return new AsyncKafkaConsumer&lt;&gt;(
+88                      logContext,</code></pre></details>
+<details class="code" id="ev-classic-sync"><summary>classic-sync · ConsumerCoordinator.java:1146</summary><p>Classic sync commit polls responses and retries retriable failures within the timer.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1146">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java</a></p><pre class="guide-pre"><code>1146      public boolean commitOffsetsSync(Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets, Timer timer) {
+1147          invokeCompletedOffsetCommitCallbacks();
+1148
+1149          if (offsets.isEmpty()) {
+1150              // We guarantee that the callbacks for all commitAsync() will be invoked when
+1151              // commitSync() completes, even if the user tries to commit empty offsets.
+1152              return invokePendingAsyncCommits(timer);
+1153          }
+1154
+1155          long attempts = 0L;
+1156          do {
+1157              if (coordinatorUnknownAndUnreadySync(timer)) {
+1158                  return false;
+1159              }
+1160
+1161              RequestFuture&lt;Void&gt; future = sendOffsetCommitRequest(offsets);
+1162              client.poll(future, timer);
+1163
+1164              // We may have had in-flight offset commits when the synchronous commit began. If so, ensure that
+1165              // the corresponding callbacks are invoked prior to returning in order to preserve the order that
+1166              // the offset commits were applied.
+1167              invokeCompletedOffsetCommitCallbacks();
+1168
+1169              if (future.succeeded()) {
+1170                  if (interceptors != null)
+1171                      interceptors.onCommit(offsets);
+1172                  return true;
+1173              }</code></pre></details>
+<details class="code" id="ev-classic-async"><summary>classic-async · ConsumerCoordinator.java:1052</summary><p>Classic async commit discovers the coordinator, submits without waiting for the acknowledgement, and queues completions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1052">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java</a></p><pre class="guide-pre"><code>1052      public RequestFuture&lt;Void&gt; commitOffsetsAsync(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets, final OffsetCommitCallback callback) {
+1053          invokeCompletedOffsetCommitCallbacks();
+1054
+1055          RequestFuture&lt;Void&gt; future = null;
+1056          if (offsets.isEmpty()) {
+1057              // No need to check coordinator if offsets is empty since commit of empty offsets is completed locally.
+1058              future = doCommitOffsetsAsync(offsets, callback);
+1059          } else if (!coordinatorUnknownAndUnreadyAsync()) {
+1060              // we need to make sure coordinator is ready before committing, since
+1061              // this is for async committing we do not try to block, but just try once to
+1062              // clear the previous discover-coordinator future, resend, or get responses;
+1063              // if the coordinator is not ready yet then we would just proceed and put that into the
+1064              // pending requests, and future poll calls would still try to complete them.
+1065              //
+1066              // the key here though is that we have to try sending the discover-coordinator if
+1067              // it's not known or ready, since this is the only place we can send such request
+1068              // under manual assignment (there we would not have heartbeat thread trying to auto-rediscover
+1069              // the coordinator).
+1070              future = doCommitOffsetsAsync(offsets, callback);
+1071          } else {
+1072              // we don't know the current coordinator, so try to find it and then send the commit
+1073              // or fail (we don't want recursive retries which can cause offset commits to arrive
+1074              // out of order). Note that there may be multiple offset commits chained to the same
+1075              // coordinator lookup request. This is fine because the listeners will be invoked in
+1076              // the same order that they were added. Note also that AbstractCoordinator prevents
+1077              // multiple concurrent coordinator lookup requests.
+1078              pendingAsyncCommits.incrementAndGet();
+1079              lookupCoordinator().addListener(new RequestFutureListener&lt;&gt;() {</code></pre></details>
+<details class="code" id="ev-classic-callback"><summary>classic-callback · ConsumerCoordinator.java:1037</summary><p>Completed callbacks are drained by consumer operations, not by a producer Sender thread.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java#L1037">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerCoordinator.java</a></p><pre class="guide-pre"><code>1037      void invokeCompletedOffsetCommitCallbacks() {
+1038          if (asyncCommitFenced.get()) {
+1039              throw new FencedInstanceIdException(&quot;Get fenced exception for group.instance.id &quot;
+1040                  + rebalanceConfig.groupInstanceId.orElse(&quot;unset_instance_id&quot;)
+1041                  + &quot;, current member.id is &quot; + memberId());
+1042          }
+1043          while (true) {
+1044              OffsetCommitCompletion completion = completedOffsetCommits.poll();
+1045              if (completion == null) {
+1046                  break;
+1047              }
+1048              completion.invoke();
+1049          }
+1050      }
+1051
+1052      public RequestFuture&lt;Void&gt; commitOffsetsAsync(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets, final OffsetCommitCallback callback) {
+1053          invokeCompletedOffsetCommitCallbacks();
+1054
+1055          RequestFuture&lt;Void&gt; future = null;
+1056          if (offsets.isEmpty()) {
+1057              // No need to check coordinator if offsets is empty since commit of empty offsets is completed locally.
+1058              future = doCommitOffsetsAsync(offsets, callback);
+1059          } else if (!coordinatorUnknownAndUnreadyAsync()) {
+1060              // we need to make sure coordinator is ready before committing, since
+1061              // this is for async committing we do not try to block, but just try once to
+1062              // clear the previous discover-coordinator future, resend, or get responses;
+1063              // if the coordinator is not ready yet then we would just proceed and put that into the
+1064              // pending requests, and future poll calls would still try to complete them.</code></pre></details>
+<details class="code" id="ev-async-app"><summary>async-app · AsyncKafkaConsumer.java:1112</summary><p>The application creates an AsyncCommitEvent and queues the user callback after the future completes.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1112">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java</a></p><pre class="guide-pre"><code>1112      private void commitAsync(Optional&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; offsets, OffsetCommitCallback callback) {
+1113          acquireAndEnsureOpen();
+1114          try {
+1115              AsyncCommitEvent asyncCommitEvent = new AsyncCommitEvent(offsets);
+1116              lastPendingAsyncCommit = commit(asyncCommitEvent).whenComplete((committedOffsets, throwable) -&gt; {
+1117                  if (throwable == null) {
+1118                      offsetCommitCallbackInvoker.enqueueInterceptorInvocation(committedOffsets);
+1119                  }
+1120
+1121                  if (callback == null) {
+1122                      if (throwable != null) {
+1123                          log.error(&quot;Offset commit with offsets {} failed&quot;, committedOffsets, throwable);
+1124                      }
+1125                      return;
+1126                  }
+1127
+1128                  offsetCommitCallbackInvoker.enqueueUserCallbackInvocation(callback, committedOffsets, (Exception) throwable);
+1129              });
+1130          } finally {
+1131              release();
+1132          }
+1133      }
+1134
+1135      private CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commit(final CommitEvent commitEvent) {
+1136          throwIfGroupIdNotDefined();
+1137          offsetCommitCallbackInvoker.executeCallbacks();
+1138
+1139          if (commitEvent.offsets().isPresent() &amp;&amp; commitEvent.offsets().get().isEmpty()) {</code></pre></details>
+<details class="code" id="ev-async-sync"><summary>async-sync · AsyncKafkaConsumer.java:1805</summary><p>SyncCommitEvent waits for pending async completions and its own result under a timer.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1805">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java</a></p><pre class="guide-pre"><code>1805      private void commitSync(Optional&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; offsets, Duration timeout) {
+1806          acquireAndEnsureOpen();
+1807          long commitStart = time.nanoseconds();
+1808          try {
+1809              SyncCommitEvent syncCommitEvent = new SyncCommitEvent(offsets, calculateDeadlineMs(time, timeout));
+1810              CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commitFuture = commit(syncCommitEvent);
+1811
+1812              Timer requestTimer = time.timer(timeout.toMillis());
+1813              awaitPendingAsyncCommitsAndExecuteCommitCallbacks(requestTimer, true);
+1814
+1815              wakeupTrigger.setActiveTask(commitFuture);
+1816              Map&lt;TopicPartition, OffsetAndMetadata&gt; committedOffsets = ConsumerUtils.getResult(commitFuture, requestTimer);
+1817              interceptors.onCommit(committedOffsets);
+1818          } finally {
+1819              wakeupTrigger.clearTask();
+1820              kafkaConsumerMetrics.recordCommitSync(time.nanoseconds() - commitStart);
+1821              release();
+1822          }
+1823      }
+1824
+1825      private void awaitPendingAsyncCommitsAndExecuteCommitCallbacks(Timer timer, boolean enableWakeup) {
+1826          if (lastPendingAsyncCommit == null || offsetCommitCallbackInvoker == null) {
+1827              return;
+1828          }
+1829
+1830          try {
+1831              final CompletableFuture&lt;Void&gt; futureToAwait = new CompletableFuture&lt;&gt;();
+1832              // We don't want the wake-up trigger to complete our pending async commit future,</code></pre></details>
+<details class="code" id="ev-async-handoff"><summary>async-handoff · AsyncKafkaConsumer.java:1135</summary><p>Even the async API can wait for the background thread to capture offsetsReady; async does not mean zero blocking work.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java#L1135">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumer.java</a></p><pre class="guide-pre"><code>1135      private CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commit(final CommitEvent commitEvent) {
+1136          throwIfGroupIdNotDefined();
+1137          offsetCommitCallbackInvoker.executeCallbacks();
+1138
+1139          if (commitEvent.offsets().isPresent() &amp;&amp; commitEvent.offsets().get().isEmpty()) {
+1140              return CompletableFuture.completedFuture(null);
+1141          }
+1142
+1143          applicationEventHandler.add(commitEvent);
+1144
+1145          // This blocks until the background thread retrieves allConsumed positions to commit if none were explicitly specified.
+1146          // This operation will ensure that the offsets to commit are not affected by fetches which may start after this
+1147          ConsumerUtils.getResult(commitEvent.offsetsReady(), defaultApiTimeoutMs.toMillis());
+1148          return commitEvent.future();
+1149      }
+1150
+1151      @Override
+1152      public void seek(TopicPartition partition, long offset) {
+1153          if (offset &lt; 0)
+1154              throw new IllegalArgumentException(&quot;seek offset must not be a negative number&quot;);
+1155
+1156          acquireAndEnsureOpen();
+1157          try {
+1158              log.info(&quot;Seeking to offset {} for partition {}&quot;, offset, partition);
+1159              SeekUnvalidatedEvent seekUnvalidatedEventEvent = new SeekUnvalidatedEvent(
+1160                  defaultApiTimeoutDeadlineMs(),
+1161                  partition,
+1162                  offset,</code></pre></details>
+<details class="code" id="ev-commit-manager-async"><summary>commit-manager-async · CommitRequestManager.java:401</summary><p>Explicit async commits are not retried after an errored attempt by this manager.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java#L401">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java</a></p><pre class="guide-pre"><code>401      public CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commitAsync(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets) {
+402          if (offsets.isEmpty()) {
+403              log.debug(&quot;Skipping commit of empty offsets&quot;);
+404              return CompletableFuture.completedFuture(Map.of());
+405          }
+406          maybeUpdateLastSeenEpochIfNewer(offsets);
+407          OffsetCommitRequestState commitRequest = createOffsetCommitRequest(offsets, Long.MAX_VALUE);
+408          pendingRequests.addOffsetCommitRequest(commitRequest);
+409
+410          CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; asyncCommitResult = new CompletableFuture&lt;&gt;();
+411          commitRequest.future.whenComplete((committedOffsets, error) -&gt; {
+412              if (error != null) {
+413                  asyncCommitResult.completeExceptionally(commitAsyncExceptionForError(error));
+414              } else {
+415                  asyncCommitResult.complete(offsets);
+416              }
+417          });
+418          return asyncCommitResult;
+419      }
+420
+421      /**
+422       * Commit offsets, retrying on expected retriable errors while the retry timeout hasn't expired.
+423       *
+424       * @param offsets    Offsets to commit
+425       * @param deadlineMs Time until which the request will be retried if it fails with
+426       *                   an expected retriable error.
+427       * @return Future that will complete when a successful response
+428       */</code></pre></details>
+<details class="code" id="ev-commit-manager-sync"><summary>commit-manager-sync · CommitRequestManager.java:463</summary><p>Explicit sync commits retry retriable errors until the deadline, with non-retriable errors surfaced.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java#L463">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/CommitRequestManager.java</a></p><pre class="guide-pre"><code>463      private void commitSyncWithRetries(OffsetCommitRequestState requestAttempt,
+464                                         CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; result) {
+465          pendingRequests.addOffsetCommitRequest(requestAttempt);
+466
+467          // Retry the same commit request while it fails with RetriableException and the retry
+468          // timeout hasn't expired.
+469          requestAttempt.future.whenComplete((res, error) -&gt; {
+470              if (error == null) {
+471                  result.complete(requestAttempt.offsets);
+472              } else {
+473                  if (error instanceof RetriableException) {
+474                      if (requestAttempt.isExpired()) {
+475                          log.info(&quot;OffsetCommit timeout expired so it won't be retried anymore&quot;);
+476                          result.completeExceptionally(maybeWrapAsTimeoutException(error));
+477                      } else {
+478                          requestAttempt.resetFuture();
+479                          commitSyncWithRetries(requestAttempt, result);
+480                      }
+481                  } else {
+482                      result.completeExceptionally(commitSyncExceptionForError(error));
+483                  }
+484              }
+485          });
+486      }
+487
+488      private Throwable commitSyncExceptionForError(Throwable error) {
+489          if (error instanceof StaleMemberEpochException) {
+490              return new CommitFailedException(&quot;OffsetCommit failed with stale member epoch. &quot;</code></pre></details>
+<details class="code" id="ev-callback-thread"><summary>callback-thread · OffsetCommitCallbackInvoker.java:28</summary><p>Background completion queues callbacks; the consumer application thread executes them during poll/commit/close.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/OffsetCommitCallbackInvoker.java#L28">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/OffsetCommitCallbackInvoker.java</a></p><pre class="guide-pre"><code>28   * Utility class that helps the application thread to invoke user registered {@link OffsetCommitCallback} and
+29   * {@link org.apache.kafka.clients.consumer.ConsumerInterceptor}s. This is
+30   * achieved by having the background thread register a {@link OffsetCommitCallbackTask} to the invoker upon the
+31   * future completion, and execute the callbacks when user polls/commits/closes the consumer.
+32   */
+33  public class OffsetCommitCallbackInvoker {
+34      private final ConsumerInterceptors&lt;?, ?&gt; interceptors;
+35
+36      OffsetCommitCallbackInvoker(ConsumerInterceptors&lt;?, ?&gt; interceptors) {
+37          this.interceptors = interceptors;
+38      }
+39
+40      // Thread-safe queue to store user-defined callbacks and interceptors to be executed
+41      private final BlockingQueue&lt;OffsetCommitCallbackTask&gt; callbackQueue = new LinkedBlockingQueue&lt;&gt;();
+42
+43      public void enqueueInterceptorInvocation(final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets) {
+44          if (!interceptors.isEmpty()) {
+45              callbackQueue.add(new OffsetCommitCallbackTask(
+46                  (offsetsParam, exception) -&gt; interceptors.onCommit(offsetsParam),
+47                  offsets,
+48                  null
+49              ));
+50          }
+51      }
+52
+53      public void enqueueUserCallbackInvocation(final OffsetCommitCallback callback,
+54                                                final Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets,
+55                                                final Exception exception) {</code></pre></details>
+<details class="code" id="ev-network-event"><summary>network-event · ApplicationEventProcessor.java:253</summary><p>The consumer network thread translates application commit events into CommitRequestManager work.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/events/ApplicationEventProcessor.java#L253">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/events/ApplicationEventProcessor.java</a></p><pre class="guide-pre"><code>253      private void process(final AsyncCommitEvent event) {
+254          if (requestManagers.commitRequestManager.isEmpty()) {
+255              event.future().completeExceptionally(new KafkaException(&quot;Unable to async commit &quot; +
+256                  &quot;offset because the CommitRequestManager is not available. Check if group.id was set correctly&quot;));
+257              return;
+258          }
+259
+260          try {
+261              CommitRequestManager manager = requestManagers.commitRequestManager.get();
+262              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = event.offsets().orElseGet(subscriptions::allConsumed);
+263              event.markOffsetsReady();
+264              CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; future = manager.commitAsync(offsets);
+265              future.whenComplete(complete(event.future()));
+266          } catch (Exception e) {
+267              event.future().completeExceptionally(e);
+268          }
+269      }
+270
+271      private void process(final SyncCommitEvent event) {
+272          if (requestManagers.commitRequestManager.isEmpty()) {
+273              event.future().completeExceptionally(new KafkaException(&quot;Unable to sync commit &quot; +
+274                  &quot;offset because the CommitRequestManager is not available. Check if group.id was set correctly&quot;));
+275              return;
+276          }
+277
+278          try {
+279              CommitRequestManager manager = requestManagers.commitRequestManager.get();
+280              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = event.offsets().orElseGet(subscriptions::allConsumed);</code></pre></details>
+<details class="code" id="ev-wire-request"><summary>wire-request · OffsetCommitRequest.json:17</summary><p>Both commit APIs use OffsetCommit API 8. Version 9 supports the consumer protocol; version 10 uses topic IDs.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/OffsetCommitRequest.json#L17">Kafka/clients/src/main/resources/common/message/OffsetCommitRequest.json</a></p><pre class="guide-pre"><code>17    &quot;apiKey&quot;: 8,
+18    &quot;type&quot;: &quot;request&quot;,
+19    &quot;listeners&quot;: [&quot;broker&quot;],
+20    &quot;name&quot;: &quot;OffsetCommitRequest&quot;,
+21    // Versions 0-1 were removed in Apache Kafka 4.0, Version 2 is the new baseline.
+22    //
+23    // Version 1 adds timestamp and group membership information, as well as the commit timestamp.
+24    //
+25    // Version 2 adds retention time.  It removes the commit timestamp added in version 1.
+26    //
+27    // Version 3 and 4 are the same as version 2.
+28    //
+29    // Version 5 removes the retention time, which is now controlled only by a broker configuration.
+30    //
+31    // Version 6 adds the leader epoch for fencing.
+32    //
+33    // version 7 adds a new field called groupInstanceId to indicate member identity across restarts.
+34    //
+35    // Version 8 is the first flexible version.
+36    //
+37    // Version 9 is the first version that can be used with the new consumer group protocol (KIP-848). The
+38    // request is the same as version 8.
+39    //
+40    // Version 10 adds support for topic ids and removes support for topic names (KIP-848).
+41    &quot;validVersions&quot;: &quot;2-10&quot;,
+42    &quot;flexibleVersions&quot;: &quot;8+&quot;,
+43    &quot;fields&quot;: [
+44      { &quot;name&quot;: &quot;GroupId&quot;, &quot;type&quot;: &quot;string&quot;, &quot;versions&quot;: &quot;0+&quot;, &quot;entityType&quot;: &quot;groupId&quot;,</code></pre></details>
+<details class="code" id="ev-wire-response"><summary>wire-response · OffsetCommitResponse.json:54</summary><p>The response contains throttle time and per-topic/per-partition error codes, not an output-transaction result.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/OffsetCommitResponse.json#L54">Kafka/clients/src/main/resources/common/message/OffsetCommitResponse.json</a></p><pre class="guide-pre"><code>54      { &quot;name&quot;: &quot;ThrottleTimeMs&quot;, &quot;type&quot;: &quot;int32&quot;, &quot;versions&quot;: &quot;3+&quot;, &quot;ignorable&quot;: true,
+55        &quot;about&quot;: &quot;The duration in milliseconds for which the request was throttled due to a quota violation, or zero if the request did not violate any quota.&quot; },
+56      { &quot;name&quot;: &quot;Topics&quot;, &quot;type&quot;: &quot;[]OffsetCommitResponseTopic&quot;, &quot;versions&quot;: &quot;0+&quot;,
+57        &quot;about&quot;: &quot;The responses for each topic.&quot;, &quot;fields&quot;: [
+58        { &quot;name&quot;: &quot;Name&quot;, &quot;type&quot;: &quot;string&quot;, &quot;versions&quot;: &quot;0-9&quot;, &quot;entityType&quot;: &quot;topicName&quot;, &quot;ignorable&quot;: true,
+59          &quot;about&quot;: &quot;The topic name.&quot; },
+60        { &quot;name&quot;:  &quot;TopicId&quot;, &quot;type&quot;: &quot;uuid&quot;, &quot;versions&quot;: &quot;10+&quot;, &quot;ignorable&quot;: true,
+61          &quot;about&quot;: &quot;The topic ID.&quot; },
+62        { &quot;name&quot;: &quot;Partitions&quot;, &quot;type&quot;: &quot;[]OffsetCommitResponsePartition&quot;, &quot;versions&quot;: &quot;0+&quot;,
+63          &quot;about&quot;: &quot;The responses for each partition in the topic.&quot;,  &quot;fields&quot;: [
+64          { &quot;name&quot;: &quot;PartitionIndex&quot;, &quot;type&quot;: &quot;int32&quot;, &quot;versions&quot;: &quot;0+&quot;,
+65            &quot;about&quot;: &quot;The partition index.&quot; },
+66          { &quot;name&quot;: &quot;ErrorCode&quot;, &quot;type&quot;: &quot;int16&quot;, &quot;versions&quot;: &quot;0+&quot;,
+67            &quot;about&quot;: &quot;The error code, or 0 if there was no error.&quot; }
+68        ]}
+69      ]}
+70    ]
+71  }
+72</code></pre></details>
+<details class="code" id="ev-broker-commit"><summary>broker-commit · KafkaApis.scala:279</summary><p>Broker authorizes group and topics, resolves topic identity, validates partitions, then delegates to the group coordinator.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L279">Kafka/core/src/main/scala/kafka/server/KafkaApis.scala</a></p><pre class="guide-pre"><code>279    def handleOffsetCommitRequest(
+280      request: Request,
+281      requestLocal: RequestLocal
+282    ): CompletableFuture[Unit] = {
+283      val offsetCommitRequest = request.body(classOf[OffsetCommitRequest])
+284
+285      // Reject the request if not authorized to the group.
+286      if (!authHelper.authorize(request.context, READ, GROUP, offsetCommitRequest.data.groupId)) {
+287        requestHelper.sendMaybeThrottle(request, offsetCommitRequest.getErrorResponse(Errors.GROUP_AUTHORIZATION_FAILED.exception))
+288        CompletableFuture.completedFuture[Unit](())
+289      } else {
+290        val useTopicIds = OffsetCommitResponse.useTopicIds(request.header.apiVersion)
+291
+292        if (useTopicIds) {
+293          offsetCommitRequest.data.topics.forEach { topic =&gt;
+294            metadataCache.getTopicName(topic.topicId).ifPresent(name =&gt; topic.setName(name))
+295          }
+296        }
+297
+298        val authorizedTopics = authHelper.filterByAuthorized(
+299          request.context,
+300          READ,
+301          TOPIC,
+302          offsetCommitRequest.data.topics,
+303          (t: OffsetCommitRequestData.OffsetCommitRequestTopic) =&gt; t.name
+304        )
+305
+306        val responseBuilder = OffsetCommitResponse.newBuilder(useTopicIds)</code></pre></details>
+<details class="code" id="ev-coordinator-commit"><summary>coordinator-commit · GroupCoordinatorService.java:2703</summary><p>The group ID selects a coordinator shard and a serialized write operation.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L2703">Kafka/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java</a></p><pre class="guide-pre"><code>2703      public CompletableFuture&lt;OffsetCommitResponseData&gt; commitOffsets(
+2704          AuthorizableRequestContext context,
+2705          OffsetCommitRequestData request,
+2706          BufferSupplier bufferSupplier
+2707      ) {
+2708          if (!isActive.get()) {
+2709              return CompletableFuture.completedFuture(OffsetCommitRequest.getErrorResponse(
+2710                  request,
+2711                  Errors.COORDINATOR_NOT_AVAILABLE
+2712              ));
+2713          }
+2714
+2715          // For backwards compatibility, we support offset commits for the empty groupId.
+2716          if (request.groupId() == null) {
+2717              return CompletableFuture.completedFuture(OffsetCommitRequest.getErrorResponse(
+2718                  request,
+2719                  Errors.INVALID_GROUP_ID
+2720              ));
+2721          }
+2722
+2723          return runtime.scheduleWriteOperation(
+2724              &quot;commit-offset&quot;,
+2725              topicPartitionFor(request.groupId()),
+2726              coordinator -&gt; coordinator.commitOffset(context, request)
+2727          ).exceptionally(exception -&gt; handleOperationException(
+2728              &quot;commit-offset&quot;,
+2729              request,
+2730              exception,</code></pre></details>
+<details class="code" id="ev-coordinator-record"><summary>coordinator-record · OffsetMetadataManager.java:620</summary><p>Validated partition offsets produce durable coordinator records.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L620">Kafka/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java</a></p><pre class="guide-pre"><code>620      public CoordinatorResult&lt;OffsetCommitResponseData, CoordinatorRecord&gt; commitOffset(
+621          AuthorizableRequestContext context,
+622          OffsetCommitRequestData request
+623      ) throws ApiException {
+624          CommitPartitionValidator validator = validateOffsetCommit(context, request);
+625
+626          final OffsetCommitResponseData response = new OffsetCommitResponseData();
+627          final List&lt;CoordinatorRecord&gt; records = new ArrayList&lt;&gt;();
+628          final long currentTimeMs = time.milliseconds();
+629          final OptionalLong expireTimestampMs = expireTimestampMs(request.retentionTimeMs(), currentTimeMs);
+630
+631          request.topics().forEach(topic -&gt; {
+632              final OffsetCommitResponseTopic topicResponse = new OffsetCommitResponseTopic()
+633                  .setTopicId(topic.topicId())
+634                  .setName(topic.name());
+635              response.topics().add(topicResponse);
+636
+637              topic.partitions().forEach(partition -&gt; {
+638                  if (isMetadataInvalid(partition.committedMetadata())) {
+639                      topicResponse.partitions().add(new OffsetCommitResponsePartition()
+640                          .setPartitionIndex(partition.partitionIndex())
+641                          .setErrorCode(Errors.OFFSET_METADATA_TOO_LARGE.code()));
+642                  } else {
+643                      // Validate commit per-partition
+644                      validator.validate(
+645                          topic.name(),
+646                          topic.topicId(),
+647                          partition.partitionIndex()</code></pre></details>
+<details class="code" id="ev-coordinator-replay"><summary>coordinator-replay · OffsetMetadataManager.java:1203</summary><p>Ordinary replay replaces a key with the value from this log record; it is not numeric max(offset).</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L1203">Kafka/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java</a></p><pre class="guide-pre"><code>1203                  OffsetAndMetadata previousValue = offsets.put(
+1204                      groupId,
+1205                      topic,
+1206                      partition,
+1207                      OffsetAndMetadata.fromRecord(recordOffset, value)
+1208                  );
+1209                  if (previousValue == null) {
+1210                      metrics.incrementNumOffsets();
+1211                  }
+1212              } else {
+1213                  log.debug(&quot;Replaying transactional offset commit with producer id {}, key {}, value {}&quot;, producerId, key, value);
+1214                  // Otherwise, the transaction offset is stored in the pending transactional
+1215                  // offsets store. Pending offsets there are moved to the main store when
+1216                  // the transaction is committed; or removed when the transaction is aborted.
+1217                  pendingTransactionalOffsets
+1218                      .computeIfAbsent(producerId, __ -&gt; new Offsets())
+1219                      .put(
+1220                          groupId,
+1221                          topic,
+1222                          partition,
+1223                          OffsetAndMetadata.fromRecord(recordOffset, value)
+1224                      );
+1225                  openTransactions.add(groupId, topic, partition, producerId);
+1226              }
+1227          } else {
+1228              if (offsets.remove(groupId, topic, partition) != null) {
+1229                  metrics.decrementNumOffsets();
+1230              }</code></pre></details>
+<details class="code" id="ev-coordinator-hw"><summary>coordinator-hw · CoordinatorRuntime.java:1830</summary><p>Advancing the replicated high watermark releases deferred coordinator operation completions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L1830">Kafka/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java</a></p><pre class="guide-pre"><code>1830                                  context.deferredEventQueue.completeUpTo(newHighWatermark);
+1831                                  coordinatorMetrics.onUpdateLastCommittedOffset(tp, newHighWatermark);
+1832                              } else {
+1833                                  log.debug(&quot;Ignored high watermark updated for {} to {} because the coordinator is not active.&quot;,
+1834                                      tp, newHighWatermark);
+1835                              }
+1836                          } finally {
+1837                              context.lock.unlock();
+1838                          }
+1839                      } else {
+1840                          log.debug(&quot;Ignored high watermark updated for {} to {} because the coordinator does not exist.&quot;,
+1841                              tp, newHighWatermark);
+1842                      }
+1843                  }));
+1844              }
+1845          }
+1846      }
+1847
+1848      /**
+1849       * 512KB. Used for initial buffer size for write operations.
+1850       */
+1851      static final int INITIAL_BUFFER_SIZE = 512 * 1024;
+1852
+1853      /**
+1854       * The log prefix.
+1855       */
+1856      private final String logPrefix;
+1857</code></pre></details>
+<details class="code" id="ev-test-async-no-retry"><summary>test-async-no-retry · CommitRequestManagerTest.java:986</summary><p>Inspected test asserts no resend after a failed explicit async commit attempt.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java#L986">Kafka/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java</a></p><pre class="guide-pre"><code>986      public void testOffsetCommitRequestErroredRequestsNotRetriedForAsyncCommit(final Errors error) {
+987          CommitRequestManager commitRequestManager = create(true, 100);
+988          when(coordinatorRequestManager.coordinator()).thenReturn(Optional.of(mockedNode));
+989
+990          Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = Collections.singletonMap(new TopicPartition(&quot;topic&quot;, 1),
+991              new OffsetAndMetadata(0));
+992
+993          // Send async commit (not expected to be retried).
+994          CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commitResult = commitRequestManager.commitAsync(offsets);
+995          completeOffsetCommitRequestWithError(commitRequestManager, error);
+996          NetworkClientDelegate.PollResult res = commitRequestManager.poll(time.milliseconds());
+997          assertEquals(0, res.unsentRequests.size());
+998          assertTrue(commitResult.isDone());
+999          assertTrue(commitResult.isCompletedExceptionally());
+1000          if (error.exception() instanceof RetriableException) {
+1001              assertFutureThrows(RetriableCommitFailedException.class, commitResult);
+1002          }
+1003
+1004          // We expect that the request should not have been retried on this async commit.
+1005          assertExceptionHandling(commitRequestManager, error, false);
+1006      }
+1007
+1008      @Test
+1009      public void testOffsetCommitSyncTimeoutNotReturnedOnPollAndFails() {
+1010          CommitRequestManager commitRequestManager = create(false, 100);
+1011          when(coordinatorRequestManager.coordinator()).thenReturn(Optional.of(mockedNode));
+1012
+1013          Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = Collections.singletonMap(</code></pre></details>
+<details class="code" id="ev-test-sync-retry"><summary>test-sync-retry · CommitRequestManagerTest.java:419</summary><p>Inspected parameterized test covers sync retry classification.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java#L419">Kafka/clients/src/test/java/org/apache/kafka/clients/consumer/internals/CommitRequestManagerTest.java</a></p><pre class="guide-pre"><code>419      public void testCommitSyncRetriedAfterExpectedRetriableException(Errors error) {
+420          CommitRequestManager commitRequestManager = create(false, 100);
+421          when(coordinatorRequestManager.coordinator()).thenReturn(Optional.of(mockedNode));
+422
+423          Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = Collections.singletonMap(
+424              new TopicPartition(&quot;topic&quot;, 1),
+425              new OffsetAndMetadata(0));
+426          long deadlineMs = time.milliseconds() + defaultApiTimeoutMs;
+427          CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commitResult = commitRequestManager.commitSync(offsets, deadlineMs);
+428          sendAndVerifyOffsetCommitRequestFailedAndMaybeRetried(commitRequestManager, error, commitResult);
+429
+430          // We expect that request should have been retried on this sync commit.
+431          assertExceptionHandling(commitRequestManager, error, true);
+432      }
+433
+434      @Test
+435      public void testCommitSyncFailsWithCommitFailedExceptionIfUnknownMemberId() {
+436          CommitRequestManager commitRequestManager = create(false, 100);
+437          when(coordinatorRequestManager.coordinator()).thenReturn(Optional.of(mockedNode));
+438
+439          Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = Collections.singletonMap(
+440              new TopicPartition(&quot;topic&quot;, 1),
+441              new OffsetAndMetadata(0));
+442          long deadlineMs = time.milliseconds() + defaultApiTimeoutMs;
+443          CompletableFuture&lt;Map&lt;TopicPartition, OffsetAndMetadata&gt;&gt; commitResult = commitRequestManager.commitSync(offsets, deadlineMs);
+444
+445          completeOffsetCommitRequestWithError(commitRequestManager, Errors.UNKNOWN_MEMBER_ID);
+446          NetworkClientDelegate.PollResult res = commitRequestManager.poll(time.milliseconds());</code></pre></details>
+<details class="code" id="ev-test-async-drain"><summary>test-async-drain · AsyncKafkaConsumerTest.java:708</summary><p>Inspected test covers pending async completion wait and timeout even for an empty sync map.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumerTest.java#L708">Kafka/clients/src/test/java/org/apache/kafka/clients/consumer/internals/AsyncKafkaConsumerTest.java</a></p><pre class="guide-pre"><code>708      public void testCommitSyncAwaitsCommitAsyncCompletionWithEmptyOffsets() {
+709          final TopicPartition tp = new TopicPartition(&quot;foo&quot;, 0);
+710          final CompletableFuture&lt;Void&gt; asyncCommitFuture = setUpConsumerWithIncompleteAsyncCommit(tp);
+711
+712          // Commit async is not completed yet, so commit sync should wait for it to complete (time out)
+713          assertThrows(TimeoutException.class, () -&gt; consumer.commitSync(Collections.emptyMap(), Duration.ofMillis(100)));
+714
+715          // Complete exceptionally async commit event
+716          asyncCommitFuture.completeExceptionally(new KafkaException(&quot;Test exception&quot;));
+717
+718          // Commit async is completed, so commit sync completes immediately (since offsets are empty)
+719          assertDoesNotThrow(() -&gt; consumer.commitSync(Collections.emptyMap(), Duration.ofMillis(100)));
+720      }
+721
+722      @Test
+723      public void testCommitSyncAwaitsCommitAsyncCompletionWithNonEmptyOffsets() {
+724          final TopicPartition tp = new TopicPartition(&quot;foo&quot;, 0);
+725          final CompletableFuture&lt;Void&gt; asyncCommitFuture = setUpConsumerWithIncompleteAsyncCommit(tp);
+726
+727          // Mock to complete sync event
+728          completeCommitSyncApplicationEventSuccessfully();
+729
+730          // Commit async is not completed yet, so commit sync should wait for it to complete (time out)
+731          assertThrows(TimeoutException.class, () -&gt; consumer.commitSync(Collections.singletonMap(tp, new OffsetAndMetadata(20)), Duration.ofMillis(100)));
+732
+733          // Complete async commit event
+734          asyncCommitFuture.complete(null);
+735</code></pre></details>
+<details class="code" id="ev-flink-emitter"><summary>flink-emitter · KafkaRecordEmitter.java:54</summary><p>Flink tracks the next offset after successful deserialization/emission into the source output.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java#L54">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java</a></p><pre class="guide-pre"><code>54              splitState.setCurrentOffset(consumerRecord.offset() + 1);
+55          } catch (Exception e) {
+56              throw new IOException(&quot;Failed to deserialize consumer record due to&quot;, e);
+57          }
+58      }
+59
+60      private static class SourceOutputWrapper&lt;T&gt; implements Collector&lt;T&gt; {
+61
+62          private SourceOutput&lt;T&gt; sourceOutput;
+63          private long timestamp;
+64
+65          @Override
+66          public void collect(T record) {
+67              sourceOutput.collect(record, timestamp);
+68          }
+69
+70          @Override
+71          public void close() {}
+72
+73          private void setSourceOutput(SourceOutput&lt;T&gt; sourceOutput) {
+74              this.sourceOutput = sourceOutput;
+75          }
+76
+77          private void setTimestamp(long timestamp) {
+78              this.timestamp = timestamp;
+79          }
+80      }
+81  }</code></pre></details>
+<details class="code" id="ev-flink-snapshot"><summary>flink-snapshot · KafkaSourceReader.java:98</summary><p>Split offsets remain checkpoint state even when Kafka offset committing is disabled.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L98">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a></p><pre class="guide-pre"><code>98      public List&lt;KafkaPartitionSplit&gt; snapshotState(long checkpointId) {
+99          List&lt;KafkaPartitionSplit&gt; splits = super.snapshotState(checkpointId);
+100          if (!commitOffsetsOnCheckpoint) {
+101              return splits;
+102          }
+103
+104          if (splits.isEmpty() &amp;&amp; offsetsOfFinishedSplits.isEmpty()) {
+105              offsetsToCommit.put(checkpointId, Collections.emptyMap());
+106          } else {
+107              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsMap =
+108                      offsetsToCommit.computeIfAbsent(checkpointId, id -&gt; new HashMap&lt;&gt;());
+109              // Put the offsets of the active splits.
+110              for (KafkaPartitionSplit split : splits) {
+111                  // If the checkpoint is triggered before the partition starting offsets
+112                  // is retrieved, do not commit the offsets for those partitions.
+113                  if (split.getStartingOffset() &gt;= 0) {
+114                      offsetsMap.put(
+115                              split.getTopicPartition(),
+116                              new OffsetAndMetadata(split.getStartingOffset()));
+117                  }
+118              }
+119              // Put offsets of all the finished splits.
+120              offsetsMap.putAll(offsetsOfFinishedSplits);
+121          }
+122          return splits;
+123      }
+124
+125      @Override</code></pre></details>
+<details class="code" id="ev-flink-notify"><summary>flink-notify · KafkaSourceReader.java:126</summary><p>A completed checkpoint selects its saved offset map, not the latest prefetched position.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L126">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a></p><pre class="guide-pre"><code>126      public void notifyCheckpointComplete(long checkpointId) throws Exception {
+127          LOG.debug(&quot;Committing offsets for checkpoint {}&quot;, checkpointId);
+128          if (!commitOffsetsOnCheckpoint) {
+129              return;
+130          }
+131
+132          Map&lt;TopicPartition, OffsetAndMetadata&gt; committedPartitions =
+133                  offsetsToCommit.get(checkpointId);
+134          if (committedPartitions == null) {
+135              LOG.debug(&quot;Offsets for checkpoint {} have already been committed.&quot;, checkpointId);
+136              return;
+137          }
+138
+139          if (committedPartitions.isEmpty()) {
+140              LOG.debug(&quot;There are no offsets to commit for checkpoint {}.&quot;, checkpointId);
+141              removeAllOffsetsToCommitUpToCheckpoint(checkpointId);
+142              return;
+143          }
+144
+145          ((KafkaSourceFetcherManager) splitFetcherManager)
+146                  .commitOffsets(
+147                          committedPartitions,
+148                          (ignored, e) -&gt; {
+149                              // The offset commit here is needed by the external monitoring. It won't
+150                              // break Flink job's correctness if we fail to commit the offset here.
+151                              if (e != null) {
+152                                  kafkaSourceReaderMetrics.recordFailedCommit();
+153                                  LOG.warn(</code></pre></details>
+<details class="code" id="ev-flink-commit-failure"><summary>flink-commit-failure · KafkaSourceReader.java:152</summary><p>Commit failure logs and records a metric; success prunes pending bookkeeping.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L152">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a></p><pre class="guide-pre"><code>152                                  kafkaSourceReaderMetrics.recordFailedCommit();
+153                                  LOG.warn(
+154                                          &quot;Failed to commit consumer offsets for checkpoint {}&quot;,
+155                                          checkpointId,
+156                                          e);
+157                              } else {
+158                                  LOG.debug(
+159                                          &quot;Successfully committed offsets for checkpoint {}&quot;,
+160                                          checkpointId);
+161                                  kafkaSourceReaderMetrics.recordSucceededCommit();
+162                                  // If the finished topic partition has been committed, we remove it
+163                                  // from the offsets of the finished splits map.
+164                                  committedPartitions.forEach(
+165                                          (tp, offset) -&gt;
+166                                                  kafkaSourceReaderMetrics.recordCommittedOffset(
+167                                                          tp, offset.offset()));
+168                                  offsetsOfFinishedSplits
+169                                          .entrySet()
+170                                          .removeIf(
+171                                                  entry -&gt;
+172                                                          committedPartitions.containsKey(
+173                                                                  entry.getKey()));
+174                                  removeAllOffsetsToCommitUpToCheckpoint(checkpointId);
+175                              }
+176                          });
+177      }
+178
+179      private void removeAllOffsetsToCommitUpToCheckpoint(long checkpointId) {</code></pre></details>
+<details class="code" id="ev-flink-fetcher"><summary>flink-fetcher · KafkaSourceFetcherManager.java:93</summary><p>Commit work is enqueued onto the split fetcher owning the Kafka consumer.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java#L93">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java</a></p><pre class="guide-pre"><code>93      private void enqueueOffsetsCommitTask(
+94              SplitFetcher&lt;ConsumerRecord&lt;byte[], byte[]&gt;, KafkaPartitionSplit&gt; splitFetcher,
+95              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsToCommit,
+96              OffsetCommitCallback callback) {
+97          KafkaPartitionSplitReader kafkaReader =
+98                  (KafkaPartitionSplitReader) splitFetcher.getSplitReader();
+99
+100          splitFetcher.enqueueTask(
+101                  new SplitFetcherTask() {
+102                      @Override
+103                      public boolean run() throws IOException {
+104                          kafkaReader.notifyCheckpointComplete(offsetsToCommit, callback);
+105                          return true;
+106                      }
+107
+108                      @Override
+109                      public void wakeUp() {}
+110                  });
+111      }
+112  }
+113</code></pre></details>
+<details class="code" id="ev-flink-client"><summary>flink-client · KafkaPartitionSplitReader.java:341</summary><p>The modern KafkaSource uses the Kafka consumer async commit API.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L341">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java</a></p><pre class="guide-pre"><code>341          ensureConsumer().commitAsync(offsetsToCommit, offsetCommitCallback);
+342      }
+343
+344      @VisibleForTesting
+345      KafkaConsumer&lt;byte[], byte[]&gt; consumer() {
+346          return ensureConsumer();
+347      }
+348
+349      @VisibleForTesting
+350      Duration getPollTimeout() {
+351          return pollTimeout;
+352      }
+353
+354      // --------------- private helper method ----------------------
+355
+356      private static Duration parsePollTimeout(Properties props) {
+357          long pollTimeoutMs =
+358                  KafkaSourceOptions.getOption(
+359                          props, KafkaSourceOptions.POLL_TIMEOUT_MS, Long::parseLong);
+360          // KafkaConsumer#poll only rejects negative timeouts, so validate the same bound here. Doing
+361          // it eagerly turns a misconfiguration into a readable error instead of an exception thrown
+362          // from the split fetcher thread on the first poll.
+363          Preconditions.checkArgument(
+364                  pollTimeoutMs &gt;= 0,
+365                  &quot;Property %s should not be negative, but is %s&quot;,
+366                  KafkaSourceOptions.POLL_TIMEOUT_MS.key(),
+367                  pollTimeoutMs);
+368          return Duration.ofMillis(pollTimeoutMs);</code></pre></details>
+<details class="code" id="ev-flink-seek"><summary>flink-seek · KafkaPartitionSplitReader.java:262</summary><p>Flink assigns splits explicitly and seeks to their starting offsets.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L262">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java</a></p><pre class="guide-pre"><code>262          consumer.assign(newPartitionAssignments);
+263
+264          // Seek on the newly assigned partitions to their stating offsets.
+265          seekToStartingOffsets(
+266                  consumer,
+267                  partitionsStartingFromEarliest,
+268                  partitionsStartingFromLatest,
+269                  partitionsStartingFromSpecifiedOffsets);
+270          // Setup the stopping offsets.
+271          acquireAndSetStoppingOffsets(
+272                  consumer, partitionsStoppingAtLatest, partitionsStoppingAtCommitted);
+273
+274          // After acquiring the starting and stopping offsets, remove the empty splits if necessary.
+275          removeEmptySplits(consumer);
+276
+277          maybeLogSplitChangesHandlingResult(consumer, splitsChange);
+278      }
+279
+280      @Override
+281      public void wakeUp() {
+282          // The only method called from a thread other than the fetcher thread, relying on
+283          // KafkaConsumer.wakeup() being the one documented thread-safe consumer call.
+284          //
+285          // wakeUp() only ever targets a running fetch task (see SplitReader#wakeUp javadoc), which
+286          // the base SplitFetcher can only schedule after handleSplitsChanges() — and therefore
+287          // ensureConsumer() — has run at least once on the fetcher thread. So the consumer is
+288          // always non-null here in practice; a pre-creation wakeup has nothing to interrupt and is
+289          // safely dropped. Note this leans on an implementation invariant of</code></pre></details>
+<details class="code" id="ev-flink-defaults"><summary>flink-defaults · KafkaSourceBuilder.java:479</summary><p>Missing group.id defaults checkpoint-offset commits off; auto commit defaults false rather than being universally forced off.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceBuilder.java#L479">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceBuilder.java</a></p><pre class="guide-pre"><code>479          if (!props.containsKey(ConsumerConfig.GROUP_ID_CONFIG)) {
+480              LOG.warn(
+481                      &quot;Offset commit on checkpoint is disabled because {} is not specified&quot;,
+482                      ConsumerConfig.GROUP_ID_CONFIG);
+483              maybeOverride(KafkaSourceOptions.COMMIT_OFFSETS_ON_CHECKPOINT.key(), &quot;false&quot;, false);
+484          }
+485          maybeOverride(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, &quot;false&quot;, false);
+486          String configuredOffsetReset = props.getProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG);
+487          if (configuredOffsetReset != null) {
+488              OffsetResetStrategy configuredOffsetResetStrategy =
+489                      KafkaPropertiesUtil.getResetStrategy(configuredOffsetReset);
+490              String normalizedOffsetReset = configuredOffsetResetStrategy.name().toLowerCase();
+491              props.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, normalizedOffsetReset);
+492              if (KafkaPropertiesUtil.hasOpposingOffsetResetStrategies(
+493                      configuredOffsetResetStrategy, startingOffsetsInitializer)) {
+494                  LOG.warn(
+495                          &quot;Configured {}={} differs from the {} strategy derived from the starting &quot;
+496                                  + &quot;offsets initializer. The source will use the initializer for &quot;
+497                                  + &quot;startup, but Kafka may reset to {} if an initialized offset &quot;
+498                                  + &quot;becomes unavailable.&quot;,
+499                          ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+500                          normalizedOffsetReset,
+501                          startingOffsetsInitializer
+502                                  .getAutoOffsetResetStrategy()
+503                                  .name()
+504                                  .toLowerCase(),
+505                          normalizedOffsetReset);
+506              }</code></pre></details>
+<details class="code" id="ev-flink-options"><summary>flink-options · KafkaSourceOptions.java:55</summary><p>Checkpoint-offset committing defaults true, subject to builder configuration and a group ID.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceOptions.java#L55">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSourceOptions.java</a></p><pre class="guide-pre"><code>55      public static final ConfigOption&lt;Boolean&gt; COMMIT_OFFSETS_ON_CHECKPOINT =
+56              ConfigOptions.key(&quot;commit.offsets.on.checkpoint&quot;)
+57                      .booleanType()
+58                      .defaultValue(true)
+59                      .withDescription(&quot;Whether to commit consuming offset on checkpoint.&quot;);
+60
+61      public static final ConfigOption&lt;Long&gt; POLL_TIMEOUT_MS =
+62              ConfigOptions.key(&quot;poll.timeout.ms&quot;)
+63                      .longType()
+64                      .defaultValue(Duration.ofSeconds(10).toMillis())
+65                      .withDescription(
+66                              &quot;The maximum time in milliseconds the Kafka consumer blocks in a single &quot;
+67                                      + &quot;poll() call while waiting for records. Since the poll returns &quot;
+68                                      + &quot;as soon as records are available, a smaller value mainly makes &quot;
+69                                      + &quot;an idle split reader react faster to split changes, at the cost &quot;
+70                                      + &quot;of polling more often. 0 polls without blocking. Must not be &quot;
+71                                      + &quot;negative.&quot;);
+72
+73      public static final ConfigOption&lt;Boolean&gt; TOPIC_INTEGRITY_CHECK_ENABLED =
+74              ConfigOptions.key(&quot;scan.topic-integrity-check.enabled&quot;)
+75                      .booleanType()
+76                      .defaultValue(false)
+77                      .withDescription(
+78                              &quot;Whether to verify topic id during runtime and fail if the topic is missing or recreated&quot;);
+79
+80      @SuppressWarnings(&quot;unchecked&quot;)
+81      public static &lt;T&gt; T getOption(
+82              Properties props, ConfigOption&lt;?&gt; configOption, Function&lt;String, T&gt; parser) {</code></pre></details>
+<details class="code" id="ev-flink-sink"><summary>flink-sink · KafkaCommitter.java:103</summary><p>Exactly-once sink finalization commits a producer transaction, not a consumer offset.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java#L103">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java</a></p><pre class="guide-pre"><code>103                  producer.commitTransaction();
+104                  backchannel.send(TransactionFinished.successful(committable.getTransactionalId()));
+105              } catch (RetriableException e) {
+106                  LOG.warn(
+107                          &quot;Encountered retriable exception while committing {}.&quot;, transactionalId, e);
+108                  request.retryLater();
+109              } catch (ProducerFencedException e) {
+110                  logFencedRequest(request, e);
+111                  handleFailedTransaction(producer);
+112                  request.signalFailedWithKnownReason(e);
+113              } catch (InvalidTxnStateException e) {
+114                  // This exception only occurs when aborting after a commit or vice versa.
+115                  // It does not appear on double commits or double aborts.
+116                  LOG.error(
+117                          &quot;Unable to commit transaction ({}) because it's in an invalid state. &quot;
+118                                  + &quot;Most likely the transaction has been aborted for some reason. Please check the Kafka logs for more details.&quot;,
+119                          request,
+120                          e);
+121                  handleFailedTransaction(producer);
+122                  request.signalFailedWithKnownReason(e);
+123              } catch (UnknownProducerIdException e) {
+124                  LOG.error(
+125                          &quot;Unable to commit transaction ({}) &quot; + UNKNOWN_PRODUCER_ID_ERROR_MESSAGE,
+126                          request,
+127                          e);
+128                  handleFailedTransaction(producer);
+129                  request.signalFailedWithKnownReason(e);
+130              } catch (InterruptException e) {</code></pre></details>
+<details class="code" id="ev-test-flink-complete"><summary>test-flink-complete · KafkaSourceReaderTest.java:219</summary><p>Inspected test verifies Kafka group offsets after checkpoint-completion notification.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L219">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java</a></p><pre class="guide-pre"><code>219      void testOffsetCommitOnCheckpointComplete() throws Exception {
+220          final String groupId = &quot;testOffsetCommitOnCheckpointComplete&quot;;
+221          try (KafkaSourceReader&lt;Integer&gt; reader =
+222                  (KafkaSourceReader&lt;Integer&gt;)
+223                          createReader(Boundedness.CONTINUOUS_UNBOUNDED, groupId)) {
+224              reader.addSplits(
+225                      getSplits(numSplits, NUM_RECORDS_PER_SPLIT, Boundedness.CONTINUOUS_UNBOUNDED));
+226              ValidatingSourceOutput output = new ValidatingSourceOutput();
+227              long checkpointId = 0;
+228              do {
+229                  checkpointId++;
+230                  reader.pollNext(output);
+231                  // Create a checkpoint for each message consumption, but not complete them.
+232                  reader.snapshotState(checkpointId);
+233              } while (output.count() &lt; totalNumRecords);
+234
+235              // The completion of the last checkpoint should subsume all the previous checkpoitns.
+236              assertThat(reader.getOffsetsToCommit()).hasSize((int) checkpointId);
+237
+238              long lastCheckpointId = checkpointId;
+239              waitUtil(
+240                      () -&gt; {
+241                          try {
+242                              reader.notifyCheckpointComplete(lastCheckpointId);
+243                          } catch (Exception exception) {
+244                              throw new RuntimeException(
+245                                      &quot;Caught unexpected exception when polling from the reader&quot;,
+246                                      exception);</code></pre></details>
+<details class="code" id="ev-test-flink-disable"><summary>test-flink-disable · KafkaSourceReaderTest.java:284</summary><p>Inspected test verifies disabled commit bookkeeping while the source still snapshots.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L284">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java</a></p><pre class="guide-pre"><code>284      void testDisableOffsetCommit() throws Exception {
+285          final Properties properties = new Properties();
+286          properties.setProperty(KafkaSourceOptions.COMMIT_OFFSETS_ON_CHECKPOINT.key(), &quot;false&quot;);
+287          try (KafkaSourceReader&lt;Integer&gt; reader =
+288                  (KafkaSourceReader&lt;Integer&gt;)
+289                          createReader(
+290                                  Boundedness.CONTINUOUS_UNBOUNDED,
+291                                  new TestingReaderContext(),
+292                                  (ignore) -&gt; {},
+293                                  properties,
+294                                  null)) {
+295              reader.addSplits(
+296                      getSplits(numSplits, NUM_RECORDS_PER_SPLIT, Boundedness.CONTINUOUS_UNBOUNDED));
+297              ValidatingSourceOutput output = new ValidatingSourceOutput();
+298              long checkpointId = 0;
+299              do {
+300                  checkpointId++;
+301                  reader.pollNext(output);
+302                  // Create a checkpoint for each message consumption, but not complete them.
+303                  reader.snapshotState(checkpointId);
+304                  // Offsets to commit should be always empty because offset commit is disabled
+305                  assertThat(reader.getOffsetsToCommit()).isEmpty();
+306              } while (output.count() &lt; totalNumRecords);
+307          }
+308      }
+309
+310      @Test
+311      void testKafkaSourceMetrics() throws Exception {</code></pre></details>
+<details class="code" id="ev-spark-config"><summary>spark-config · KafkaSourceProvider.scala:334</summary><p>Structured Streaming rejects user-specified enable.auto.commit and sets it false on internal consumers.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala#L334">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaSourceProvider.scala</a></p><pre class="guide-pre"><code>334      val otherUnsupportedConfigs = Seq(
+335        ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, // committing correctly requires new APIs in Source
+336        ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG) // interceptors can modify payload, so not safe
+337
+338      otherUnsupportedConfigs.foreach { c =&gt;
+339        if (params.contains(s&quot;kafka.$c&quot;)) {
+340          throw new IllegalArgumentException(s&quot;Kafka option '$c' is not supported&quot;)
+341        }
+342      }
+343
+344      if (!params.contains(s&quot;kafka.${ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG}&quot;)) {
+345        throw new IllegalArgumentException(
+346          s&quot;Option 'kafka.${ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG}' must be specified for &quot; +
+347            s&quot;configuring Kafka consumer&quot;)
+348      }
+349
+350      if (params.contains(MIN_OFFSET_PER_TRIGGER) &amp;&amp; params.contains(MAX_OFFSET_PER_TRIGGER)) {
+351        val minOffsets = params.get(MIN_OFFSET_PER_TRIGGER).get.toLong
+352        val maxOffsets = params.get(MAX_OFFSET_PER_TRIGGER).get.toLong
+353        if (minOffsets &gt; maxOffsets) {
+354          throw new IllegalArgumentException(s&quot;The value of minOffsetPerTrigger($minOffsets) is &quot; +
+355            s&quot;higher than the maxOffsetsPerTrigger($maxOffsets).&quot;)
+356        }
+357      }
+358    }
+359
+360    private def validateStreamOptions(params: CaseInsensitiveMap[String]) = {
+361      // Stream specific options</code></pre></details>
+<details class="code" id="ev-spark-noop"><summary>spark-noop · KafkaMicroBatchStream.scala:339</summary><p>The Kafka microbatch source commit callback is a no-op, not KafkaConsumer.commitSync/Async.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala#L339">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchStream.scala</a></p><pre class="guide-pre"><code>339    override def commit(end: Offset): Unit = {}
+340
+341    override def stop(): Unit = {
+342      kafkaOffsetReader.close()
+343    }
+344
+345    override def toString(): String = s&quot;KafkaV2[$kafkaOffsetReader]&quot;
+346
+347    override def metrics(latestConsumedOffset: Optional[Offset]): ju.Map[String, String] = {
+348      val reCalculatedLatestPartitionOffsets =
+349        if (inRealTimeMode) {
+350          if (!latestConsumedOffset.isPresent) {
+351            // this means a batch has no end offsets, which should not happen
+352            None
+353          } else {
+354            Some {
+355              kafkaOffsetReader.fetchLatestOffsets(
+356                Some(latestConsumedOffset.get.asInstanceOf[KafkaSourceOffset].partitionToOffsets))
+357            }
+358          }
+359        } else {
+360          Option(latestPartitionOffsets)
+361        }
+362
+363        KafkaMicroBatchStream.metrics(latestConsumedOffset, reCalculatedLatestPartitionOffsets)
+364    }
+365
+366    /**</code></pre></details>
+<details class="code" id="ev-spark-fetch"><summary>spark-fetch · KafkaDataConsumer.scala:83</summary><p>Executor consumer seeks and polls at offsets selected by Spark.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala#L83">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/consumer/KafkaDataConsumer.scala</a></p><pre class="guide-pre"><code>83    def fetch(offset: Long, pollTimeoutMs: Long):
+84        (ju.List[ConsumerRecord[Array[Byte], Array[Byte]]], Long, AvailableOffsetRange) = {
+85
+86      // Seek to the offset because we may call seekToBeginning or seekToEnd before this.
+87      seek(offset)
+88      val p = consumer.poll(Duration.ofMillis(pollTimeoutMs))
+89      val r = p.records(topicPartition)
+90      logDebug(s&quot;Polled $groupId ${p.partitions()}  ${r.size}&quot;)
+91      val offsetAfterPoll = consumer.position(topicPartition)
+92      logDebug(s&quot;Offset changed from $offset to $offsetAfterPoll after polling&quot;)
+93      val range = getAvailableOffsetRange()
+94      val fetchedData = (r, offsetAfterPoll, range)
+95      if (r.isEmpty) {
+96        // We cannot fetch anything after `poll`. Two possible cases:
+97        // - `offset` is out of range so that Kafka returns nothing. `OffsetOutOfRangeException` will
+98        //   be thrown.
+99        // - Cannot fetch any data before timeout. `TimeoutException` will be thrown.
+100        // - Fetched something but all of them are invisible. This is a valid case and let the
+101        //   caller handle this.
+102        if (offset &lt; range.earliest || offset &gt;= range.latest) {
+103          throw new OffsetOutOfRangeException(
+104            Map(topicPartition -&gt; java.lang.Long.valueOf(offset)).asJava)
+105        } else if (offset == offsetAfterPoll) {
+106          throw new TimeoutException(
+107            s&quot;Cannot fetch record for offset $offset in $pollTimeoutMs milliseconds&quot;)
+108        } else {
+109          logDebug(log&quot;Polled zero visible records for ${MDC(TOPIC_PARTITION, topicPartition)} &quot; +
+110            log&quot;in group ${MDC(GROUP_ID, groupId)} after ${MDC(TIMEOUT, pollTimeoutMs)} &quot; +</code></pre></details>
+<details class="code" id="ev-spark-start"><summary>spark-start · MicroBatchExecution.scala:1357</summary><p>Default synchronous microbatch execution durably logs planned end offsets before running the batch.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1357">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1357    protected def markMicroBatchStart(execCtx: MicroBatchExecutionContext): Unit = {
+1358
+1359      if (!trigger.isInstanceOf[RealTimeTrigger]) {
+1360        if (!offsetLog.add(
+1361            execCtx.batchId,
+1362            execCtx.endOffsets.toOffsets(sources, sourceIdMap, execCtx.offsetSeqMetadata)
+1363          )) {
+1364          throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+1365        }
+1366
+1367        logInfo(
+1368          log&quot;Committed offsets for batch ${MDC(LogKeys.BATCH_ID, execCtx.batchId)}. &quot; +
+1369          log&quot;Metadata ${MDC(LogKeys.OFFSET_SEQUENCE_METADATA, execCtx.offsetSeqMetadata.toString)}&quot;
+1370        )
+1371      } else {
+1372        logInfo(log&quot;Delay offset logging for batch ${MDC(BATCH_ID, execCtx.batchId)} &quot; +
+1373          log&quot;in real time mode.&quot;)
+1374      }
+1375    }
+1376
+1377    /**
+1378     * Method called once after the planning is done and before the start of the microbatch execution.
+1379     * It can be used to perform any pre-execution tasks.
+1380     */
+1381    protected def markMicroBatchExecutionStart(execCtx: MicroBatchExecutionContext): Unit = {}
+1382
+1383    /**
+1384     * Store the state store checkpoint id for a finishing batch to `currentStateStoreCkptId`,</code></pre></details>
+<details class="code" id="ev-spark-end"><summary>spark-end · MicroBatchExecution.scala:1558</summary><p>Successful batch completion adds a checkpoint commit-log entry.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1558">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1558        if (!commitLog.add(execCtx.batchId, metadata)) {
+1559          throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+1560        }
+1561      }
+1562      signalProcessAllAvailableIfRealTimeMode(execCtx)
+1563      committedOffsets ++= execCtx.endOffsets
+1564    }
+1565
+1566    /**
+1567     * When running in RealTimeTrigger mode, this method extracts the end offsets after the current
+1568     * batch has finished execution and writes them to the execution context. In real-time mode the
+1569     * end offsets are not known up front; they are gathered from all [[RealTimeStreamScanExec]]
+1570     * nodes (i.e. tasks that execute a source partition), merged, and recorded on the context so
+1571     * they can subsequently be written to the offset log.
+1572     */
+1573    protected def populateBatchOffsetsForRTM(execCtx: MicroBatchExecutionContext): Unit = {
+1574      assert(trigger.isInstanceOf[RealTimeTrigger])
+1575
+1576      val execs = StreamingQueryPlanTraverseHelper
+1577        .collectFromUnfoldedPlan(lastExecution.executedPlan) {
+1578        case e: RealTimeStreamScanExec =&gt; e
+1579      }
+1580
+1581      val endOffsetMap = MutableMap[SparkDataStream, OffsetV2]()
+1582      execs.foreach { e =&gt;
+1583        val lowLatencyExec = e.asInstanceOf[RealTimeStreamScanExec]
+1584        val accus: Seq[PartitionOffsetWithIndex] =
+1585          lowLatencyExec.endOffsetsAccumulator.value.asScala.toSeq</code></pre></details>
+<details class="code" id="ev-spark-output-order"><summary>spark-output-order · MicroBatchExecution.scala:1346</summary><p>Sink execution completes before markMicroBatchEnd in the ordinary microbatch path.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1346">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1346        execCtx.sinkCommitProgress = batchSinkProgress
+1347        markMicroBatchEnd(execCtx)
+1348      }
+1349      logDebug(s&quot;Completed batch ${execCtx.batchId}&quot;)
+1350    }
+1351
+1352
+1353    /**
+1354     * Called at the start of the micro batch with given offsets. It takes care of offset
+1355     * checkpointing to offset log and any microbatch startup tasks.
+1356     */
+1357    protected def markMicroBatchStart(execCtx: MicroBatchExecutionContext): Unit = {
+1358
+1359      if (!trigger.isInstanceOf[RealTimeTrigger]) {
+1360        if (!offsetLog.add(
+1361            execCtx.batchId,
+1362            execCtx.endOffsets.toOffsets(sources, sourceIdMap, execCtx.offsetSeqMetadata)
+1363          )) {
+1364          throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+1365        }
+1366
+1367        logInfo(
+1368          log&quot;Committed offsets for batch ${MDC(LogKeys.BATCH_ID, execCtx.batchId)}. &quot; +
+1369          log&quot;Metadata ${MDC(LogKeys.OFFSET_SEQUENCE_METADATA, execCtx.offsetSeqMetadata.toString)}&quot;
+1370        )
+1371      } else {
+1372        logInfo(log&quot;Delay offset logging for batch ${MDC(BATCH_ID, execCtx.batchId)} &quot; +
+1373          log&quot;in real time mode.&quot;)</code></pre></details>
+<details class="code" id="ev-spark-recovery"><summary>spark-recovery · MicroBatchExecution.scala:808</summary><p>Recovery compares checkpoint offset and commit logs to choose replay versus next batch.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L808">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>808    protected def populateStartOffsets(
+809        execCtx: MicroBatchExecutionContext,
+810        sparkSessionToRunBatches: SparkSession): Unit = {
+811      execCtx.sinkCommitProgress = None
+812      offsetLog.getLatest() match {
+813        case Some((latestBatchId, nextOffsets)) =&gt;
+814          /* First assume that we are re-executing the latest known batch
+815           * in the offset log */
+816          execCtx.batchId = latestBatchId
+817          execCtx.isCurrentBatchConstructed = true
+818          execCtx.endOffsets = nextOffsets.toStreamProgress(sources, sourceIdMap)
+819
+820          // validate the integrity of offset log and get the previous offset from the offset log
+821          val secondLatestOffsets = validateOffsetLogAndGetPrevOffset(latestBatchId)
+822          secondLatestOffsets.foreach { offset =&gt;
+823            execCtx.startOffsets = offset.toStreamProgress(sources, sourceIdMap)
+824          }
+825
+826          // update offset metadata
+827          nextOffsets.metadataOpt.foreach { metadata =&gt;
+828            OffsetSeqMetadata.setSessionConf(metadata, sparkSessionToRunBatches.sessionState.conf)
+829            execCtx.offsetSeqMetadata = OffsetSeqMetadata(
+830              metadata.batchWatermarkMs, metadata.batchTimestampMs, sparkSessionToRunBatches.conf)
+831            watermarkTracker = WatermarkTracker(sparkSessionToRunBatches.conf, logicalPlan)
+832            watermarkTracker.setWatermark(metadata.batchWatermarkMs)
+833          }
+834
+835          /* identify the current batch id: if commit log indicates we successfully processed the</code></pre></details>
+<details class="code" id="ev-spark-source-commit"><summary>spark-source-commit · MicroBatchExecution.scala:1086</summary><p>Engine source.commit is a generic lifecycle callback; Kafka implements it as no-op.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala#L1086">spark/sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/runtime/MicroBatchExecution.scala</a></p><pre class="guide-pre"><code>1086    protected def commitSources(offsetSeq: OffsetSeqBase): Unit = {
+1087      offsetSeq.toStreamProgress(sources, sourceIdMap).foreach {
+1088        case (src: Source, off: Offset) =&gt; src.commit(off)
+1089        case (stream: MicroBatchStream, off) =&gt;
+1090          stream.commit(stream.deserializeOffset(off.json))
+1091        case (src, _) =&gt;
+1092          throw new IllegalArgumentException(
+1093            s&quot;Unknown source is found at constructNextBatch: $src&quot;)
+1094      }
+1095    }
+1096
+1097    /**
+1098     * Processes any data available between `endOffsets` and `startOffset`.
+1099     * @param sparkSessionToRunBatch Isolated [[SparkSession]] to run this batch with.
+1100     */
+1101    private def runBatch(
+1102        execCtx: MicroBatchExecutionContext,
+1103        sparkSessionToRunBatch: SparkSession): Unit = {
+1104      logDebug(s&quot;Running batch ${execCtx.batchId}&quot;)
+1105
+1106      // Request unprocessed data from all sources.
+1107      val mutableNewData = mutable.Map.empty ++ execCtx.reportTimeTaken(&quot;getBatch&quot;) {
+1108        execCtx.endOffsets.flatMap {
+1109          case (source: Source, available: Offset)
+1110            if execCtx.startOffsets.get(source).map(_ != available).getOrElse(true) =&gt;
+1111            val current = execCtx.startOffsets.get(source).map(_.asInstanceOf[Offset])
+1112            val batch = source.getBatch(current, available)
+1113            assert(batch.isStreaming,</code></pre></details>
+<details class="code" id="ev-spark-sink"><summary>spark-sink · KafkaDataWriter.scala:58</summary><p>Kafka writer commit flushes producer sends and checks errors; it does not couple input group offsets into a Kafka transaction.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala#L58">spark/connector/kafka-0-10-sql/src/main/scala/org/apache/spark/sql/kafka010/KafkaDataWriter.scala</a></p><pre class="guide-pre"><code>58    def commit(): WriterCommitMessage = {
+59      // Send is asynchronous, but we can't commit until all rows are actually in Kafka.
+60      // This requires flushing and then checking that no callbacks produced errors.
+61      // We also check for errors before to fail as soon as possible - the check is cheap.
+62      checkForErrors()
+63      producer.foreach(_.producer.flush())
+64      checkForErrors()
+65      KafkaDataWriterCommitMessage
+66    }
+67
+68    def abort(): Unit = {}
+69
+70    def close(): Unit = {
+71      producer.foreach(InternalKafkaProducerPool.release)
+72      producer = None
+73    }
+74  }
+75</code></pre></details>
+<details class="code" id="ev-spark-doc"><summary>spark-doc · structured-streaming-kafka-integration.md:1046</summary><p>Version-pinned integration documentation explicitly states that Kafka source offsets are not committed.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/docs/streaming/structured-streaming-kafka-integration.md#L1046">spark/docs/streaming/structured-streaming-kafka-integration.md</a></p><pre class="guide-pre"><code>1046  - **enable.auto.commit**: Kafka source doesn't commit any offset.
+1047  - **interceptor.classes**: Kafka source always read keys and values as byte arrays. It's not safe to
+1048   use ConsumerInterceptor as it may break the query.
+1049
+1050  In addition, an operator can reject further Kafka params by listing their names, without the
+1051  `kafka.` prefix, in the `spark.sql.kafka.disallowedOptions` configuration; setting any listed
+1052  param through a Kafka source or sink option will then throw an exception. This is a static
+1053  configuration. It must be set when the SparkSession is created, for example with
+1054  `--conf spark.sql.kafka.disallowedOptions=...`, and an application cannot change it at runtime.
+1055
+1056  ## Deploying
+1057
+1058  As with any Spark applications, `spark-submit` is used to launch your application. `spark-sql-kafka-0-10_{{site.SCALA_BINARY_VERSION}}`
+1059  and its dependencies can be directly added to `spark-submit` using `--packages`, such as,
+1060
+1061      ./bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_{{site.SCALA_BINARY_VERSION}}:{{site.SPARK_VERSION_SHORT}} ...
+1062
+1063  For experimenting on `spark-shell`, you can also use `--packages` to add `spark-sql-kafka-0-10_{{site.SCALA_BINARY_VERSION}}` and its dependencies directly,
+1064
+1065      ./bin/spark-shell --packages org.apache.spark:spark-sql-kafka-0-10_{{site.SCALA_BINARY_VERSION}}:{{site.SPARK_VERSION_SHORT}} ...
+1066
+1067  See [Application Submission Guide](../submitting-applications.html) for more details about submitting
+1068  applications with external dependencies.
+1069
+1070  ## Security
+1071
+1072  Kafka 0.9.0.0 introduced several features that increases security in a cluster. For detailed
+1073  description about these possibilities, see [Kafka security docs](http://kafka.apache.org/documentation.html#security).</code></pre></details>
+<details class="code" id="ev-dstream-queue"><summary>dstream-queue · DirectKafkaInputDStream.scala:292</summary><p>Legacy DStreams enqueue ranges and keep the most recent callback.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L292">spark/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala</a></p><pre class="guide-pre"><code>292    def commitAsync(offsetRanges: Array[OffsetRange], callback: OffsetCommitCallback): Unit = {
+293      commitCallback.set(callback)
+294      commitQueue.addAll(ju.Arrays.asList(offsetRanges: _*))
+295    }
+296
+297    protected def commitAll(): Unit = {
+298      val m = new ju.HashMap[TopicPartition, OffsetAndMetadata]()
+299      var osr = commitQueue.poll()
+300      while (null != osr) {
+301        val tp = osr.topicPartition()
+302        val x = m.get(tp)
+303        val offset = if (null == x) { osr.untilOffset } else { Math.max(x.offset, osr.untilOffset) }
+304        m.put(tp, new OffsetAndMetadata(offset))
+305        osr = commitQueue.poll()
+306      }
+307      if (!m.isEmpty) {
+308        consumer().commitAsync(m, commitCallback.get)
+309      }
+310    }
+311
+312    private[streaming]
+313    class DirectKafkaInputDStreamCheckpointData extends DStreamCheckpointData(this) {
+314      def batchForTime: mutable.HashMap[Time, Array[(String, Int, Long, Long)]] = {
+315        data.asInstanceOf[mutable.HashMap[Time, Array[OffsetRange.OffsetRangeTuple]]]
+316      }
+317
+318      override def update(time: Time): Unit = {
+319        batchForTime.clear()</code></pre></details>
+<details class="code" id="ev-dstream-drain"><summary>dstream-drain · DirectKafkaInputDStream.scala:297</summary><p>A later compute drains queued ranges, takes maximum untilOffset per partition, then calls Kafka commitAsync.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L297">spark/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala</a></p><pre class="guide-pre"><code>297    protected def commitAll(): Unit = {
+298      val m = new ju.HashMap[TopicPartition, OffsetAndMetadata]()
+299      var osr = commitQueue.poll()
+300      while (null != osr) {
+301        val tp = osr.topicPartition()
+302        val x = m.get(tp)
+303        val offset = if (null == x) { osr.untilOffset } else { Math.max(x.offset, osr.untilOffset) }
+304        m.put(tp, new OffsetAndMetadata(offset))
+305        osr = commitQueue.poll()
+306      }
+307      if (!m.isEmpty) {
+308        consumer().commitAsync(m, commitCallback.get)
+309      }
+310    }
+311
+312    private[streaming]
+313    class DirectKafkaInputDStreamCheckpointData extends DStreamCheckpointData(this) {
+314      def batchForTime: mutable.HashMap[Time, Array[(String, Int, Long, Long)]] = {
+315        data.asInstanceOf[mutable.HashMap[Time, Array[OffsetRange.OffsetRangeTuple]]]
+316      }
+317
+318      override def update(time: Time): Unit = {
+319        batchForTime.clear()
+320        generatedRDDs.foreach { kv =&gt;
+321          val a = kv._2.asInstanceOf[KafkaRDD[K, V]].offsetRanges.map(_.toTuple)
+322          batchForTime += kv._1 -&gt; a
+323        }
+324      }</code></pre></details>
+<details class="code" id="ev-dstream-compute"><summary>dstream-compute · DirectKafkaInputDStream.scala:255</summary><p>DirectKafkaInputDStream.compute triggers commitAll on the driver.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala#L255">spark/connector/kafka-0-10/src/main/scala/org/apache/spark/streaming/kafka010/DirectKafkaInputDStream.scala</a></p><pre class="guide-pre"><code>255      currentOffsets = untilOffsets
+256      commitAll()
+257      Some(rdd)
+258    }
+259
+260    override def start(): Unit = {
+261      val c = consumer()
+262      paranoidPoll(c)
+263      if (currentOffsets.isEmpty) {
+264        currentOffsets = c.assignment().asScala.map { tp =&gt;
+265          tp -&gt; c.position(tp)
+266        }.toMap
+267      }
+268    }
+269
+270    override def stop(): Unit = this.synchronized {
+271      if (kc != null) {
+272        kc.close()
+273      }
+274    }
+275
+276    protected val commitQueue = new ConcurrentLinkedQueue[OffsetRange]
+277    protected val commitCallback = new AtomicReference[OffsetCommitCallback]
+278
+279    /**
+280     * Queue up offset ranges for commit to Kafka at a future time.  Threadsafe.
+281     * @param offsetRanges The maximum untilOffset for a given partition will be used at commit.
+282     */</code></pre></details>
+<details class="code" id="ev-test-dstream"><summary>test-dstream · DirectKafkaStreamSuite.scala:422</summary><p>Inspected integration test stores outputs before enqueueing commits and verifies restart offsets.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10/src/test/scala/org/apache/spark/streaming/kafka010/DirectKafkaStreamSuite.scala#L422">spark/connector/kafka-0-10/src/test/scala/org/apache/spark/streaming/kafka010/DirectKafkaStreamSuite.scala</a></p><pre class="guide-pre"><code>422    test(&quot;offset recovery from kafka&quot;) {
+423      val topic = &quot;recoveryfromkafka&quot;
+424      kafkaTestUtils.createTopic(topic)
+425
+426      val kafkaParams = getKafkaParams(
+427        &quot;auto.offset.reset&quot; -&gt; &quot;earliest&quot;,
+428        (&quot;enable.auto.commit&quot;, false: java.lang.Boolean)
+429      )
+430
+431      val collectedData = new ConcurrentLinkedQueue[String]()
+432      val committed = new ConcurrentHashMap[TopicPartition, OffsetAndMetadata]()
+433
+434      // Send data to Kafka and wait for it to be received
+435      def sendDataAndWaitForReceive(data: Seq[Int]): Unit = {
+436        val strings = data.map { _.toString}
+437        kafkaTestUtils.sendMessages(topic, strings.map { _ -&gt; 1}.toMap)
+438        eventually(timeout(10.seconds), interval(50.milliseconds)) {
+439          assert(strings.forall { collectedData.contains })
+440        }
+441      }
+442
+443      // Setup the streaming context
+444      ssc = new StreamingContext(sparkConf, Milliseconds(100))
+445      withClue(&quot;Error creating direct stream&quot;) {
+446        val kafkaStream = KafkaUtils.createDirectStream[String, String](
+447          ssc,
+448          preferredHosts,
+449          ConsumerStrategies.Subscribe[String, String](List(topic), kafkaParams.asScala))</code></pre></details>
+<details class="code" id="ev-test-spark-config"><summary>test-spark-config · KafkaMicroBatchSourceSuite.scala:2412</summary><p>Inspected test asserts that the source rejects this Kafka config.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala#L2412">spark/connector/kafka-0-10-sql/src/test/scala/org/apache/spark/sql/kafka010/KafkaMicroBatchSourceSuite.scala</a></p><pre class="guide-pre"><code>2412      testUnsupportedConfig(&quot;kafka.enable.auto.commit&quot;)
+2413      testUnsupportedConfig(&quot;kafka.interceptor.classes&quot;)
+2414      testUnsupportedConfig(&quot;kafka.key.deserializer&quot;)
+2415      testUnsupportedConfig(&quot;kafka.value.deserializer&quot;)
+2416
+2417      testUnsupportedConfig(&quot;kafka.auto.offset.reset&quot;, &quot;none&quot;)
+2418      testUnsupportedConfig(&quot;kafka.auto.offset.reset&quot;, &quot;someValue&quot;)
+2419      testUnsupportedConfig(&quot;kafka.auto.offset.reset&quot;, &quot;earliest&quot;)
+2420      testUnsupportedConfig(&quot;kafka.auto.offset.reset&quot;, &quot;latest&quot;)
+2421    }
+2422
+2423    test(&quot;get offsets from case insensitive parameters&quot;) {
+2424      for ((optionKey, optionValue, answer) &lt;- Seq(
+2425        (STARTING_OFFSETS_OPTION_KEY, &quot;earLiEst&quot;, EarliestOffsetRangeLimit),
+2426        (ENDING_OFFSETS_OPTION_KEY, &quot;laTest&quot;, LatestOffsetRangeLimit),
+2427        (STARTING_OFFSETS_OPTION_KEY, &quot;&quot;&quot;{&quot;topic-A&quot;:{&quot;0&quot;:23}}&quot;&quot;&quot;,
+2428          SpecificOffsetRangeLimit(Map(new TopicPartition(&quot;topic-A&quot;, 0) -&gt; 23))),
+2429        (STARTING_OFFSETS_OPTION_KEY, &quot;&quot;&quot;{&quot;topic-A&quot;:&quot;eArLiEst&quot;,&quot;topic-B&quot;:{&quot;0&quot;:23}}&quot;&quot;&quot;,
+2430          SpecificOffsetRangeLimit(
+2431            Map(new TopicPartition(&quot;topic-B&quot;, 0) -&gt; 23),
+2432            Map(&quot;topic-A&quot; -&gt; KafkaOffsetRangeLimit.EARLIEST))))) {
+2433        val offset = getKafkaOffsetRangeLimit(
+2434          CaseInsensitiveMap[String](Map(optionKey -&gt; optionValue)), &quot;dummy&quot;, &quot;dummy&quot;, optionKey,
+2435          answer)
+2436        assert(offset === answer)
+2437      }
+2438
+2439      for ((optionKey, answer) &lt;- Seq(</code></pre></details>
+<details class="code" id="ev-test-spark-log"><summary>test-spark-log · MicroBatchExecutionSuite.scala:164</summary><p>Inspected test fails recovery when the required checkpoint offset-log batch is missing.</p><p class="path"><a href="https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala#L164">spark/sql/core/src/test/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecutionSuite.scala</a></p><pre class="guide-pre"><code>164    test(&quot;SPARK-38033: SS cannot be started because the commitId and offsetId are inconsistent&quot;) {
+165      val inputData = MemoryStream[Int]
+166      val streamEvent = inputData.toDF().select(&quot;value&quot;)
+167
+168      val resourceUri = this.getClass.getResource(
+169        &quot;/structured-streaming/checkpoint-test-offsetId-commitId-inconsistent/&quot;).toURI
+170
+171      val checkpointDir = Utils.createTempDir().getCanonicalFile
+172      // Copy the checkpoint to a temp dir to prevent changes to the original.
+173      // Not doing this will lead to the test passing on the first run, but fail subsequent runs.
+174      Utils.copyDirectory(new File(resourceUri), checkpointDir)
+175
+176      // Disable this check so it fails where we throw the exception we are verifying
+177      withSQLConf(SQLConf.STREAMING_CHECK_UNFINISHED_REPARTITION_ON_RESTART.key -&gt; &quot;false&quot;) {
+178        testStream(streamEvent) (
+179          AddData(inputData, 1, 2, 3, 4, 5, 6),
+180          StartStream(Trigger.AvailableNow(), checkpointLocation = checkpointDir.getAbsolutePath),
+181          ExpectFailure[IllegalStateException] { e =&gt;
+182            assert(e.getMessage.contains(&quot;batch 3 doesn't exist&quot;))
+183          }
+184        )
+185      }
+186    }
+187
+188    test(&quot;no-data-batch re-executed after restart should call V1 source.getBatch()&quot;) {
+189      val testSource = ReExecutedBatchTestSource(spark)
+190      val df = testSource.toDF()
+191        .withColumn(&quot;eventTime&quot;, timestamp_seconds($&quot;value&quot;))</code></pre></details><p>Supporting published API references: <a href="https://kafka.apache.org/41/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html">Kafka 4.1 consumer API</a>, <a href="https://spark.apache.org/docs/4.0.2/streaming/structured-streaming-kafka-integration.html">Spark 4.0.2 Structured Streaming Kafka integration</a>, and <a href="https://spark.apache.org/docs/4.0.2/streaming-kafka-0-10-integration.html">legacy Spark DStream integration</a>. These releases differ from the pinned development snapshots; source wins where details differ. Historical wording about Kafka lacking transactions must not be read as a claim about modern Kafka.</p><p><a href="kafka-offset-validation.json">Source manifest and artifact validation</a></p></section><footer><a href="index.html">Field guide home</a><a href="kafka-group-share-coordinators.html">Group and share coordinator recovery</a></footer></main></div></body></html>

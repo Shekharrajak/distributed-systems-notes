@@ -1,0 +1,743 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Kafka leadership, metadata and broker failure · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head><body data-page="kafka-leadership-metadata.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Ownership · durable state · fencing · recovery</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Election, coordinator, marker…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Chapter 21 · source-backed Kafka deep dive</p><h1>Kafka leadership, metadata and broker failure</h1><p class="intro">First separate the owners. Then follow controller election, committed metadata propagation, partition failover and the limits of recovery.</p><p class="guide-footer-note">Pinned source, not a live cluster inspection. Start with the summary; expand the code at the end.</p><nav class="toc" aria-label="On this page"><a href="#summary">1. There is no single leader broker</a><a href="#deployment">2. Processes, pods, listeners and threads</a><a href="#metadata">3. What cluster metadata contains—and what it does not</a><a href="#election">4. KRaft controller election, step by step</a><a href="#partition-failure">5. Broker and partition-leader failure</a><a href="#failure-matrix">6. Failure matrix: safety is not the same as availability</a><a href="#tradeoffs">7. Performance and operational reasoning</a><a href="#evidence">Source evidence, scope and validation gaps</a></nav></div><section id="summary"><h2>1. There is no single leader broker</h2>
+ <div class="table-scroll"><table><thead><tr><th>Role</th><th>Unit of ownership</th><th>Durable truth / selection</th></tr></thead><tbody><tr><td>Active KRaft controller</td><td>Cluster metadata decisions</td><td>Metadata quorum elects one leader; a majority of controller voters commits metadata.</td></tr><tr><td>Partition leader</td><td>One user or internal topic partition</td><td>Controller chooses an eligible replica and records the change; followers pull the leader’s log.</td></tr><tr><td>Group coordinator</td><td>Groups hashing to one __consumer_offsets partition</td><td>That internal partition’s leader owns the shard. Consumer-group leader is a different client-side concept.</td></tr><tr><td>Transaction coordinator</td><td>Transactional IDs hashing to one __transaction_state partition</td><td>That partition’s leader owns transaction metadata and marker-recovery work.</td></tr><tr><td>Share coordinator</td><td>Share keys hashing to one __share_group_state partition</td><td>Owns durable delivery state, not the source records or share-group membership.</td></tr></tbody></table></div>
+ <p><strong>Controller election is Raft. User-topic replica election is not a separate Raft election per partition.</strong> The controller records a new partition owner; brokers learn it through committed metadata. Coordinators inherit ownership from their backing partition, so there is no additional vote for each group or transactional ID.</p>
+ <figure class="diagram" id="recovery-roles"><figcaption><h3>One cluster, several independent owners</h3><p>Illustrative placement: these are roles inside processes, not one required pod per box. The controller assigns partition leaders; backing-partition leadership determines coordinator ownership.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-roles.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-roles.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: One cluster, several independent owners"><img src="diagrams/recovery-roles.svg" alt="One cluster, several independent owners. Illustrative placement: these are roles inside processes, not one required pod per box. The controller assigns partition leaders; backing-partition leadership determines coordinator ownership." loading="lazy"></div></figure><div class="refs">Source: <a class="cite" href="#ev-raft-election">raft-election</a> <a class="cite" href="#ev-partition-election">partition-election</a> <a class="cite" href="#ev-broker-publisher">broker-publisher</a> <a class="cite" href="#ev-group-route">group-route</a> <a class="cite" href="#ev-txn-route">txn-route</a> <a class="cite" href="#ev-share-route">share-route</a></div></section>
+<section id="deployment"><h2>2. Processes, pods, listeners and threads</h2>
+ <p>A common production layout has separate controller processes and broker processes spread across failure domains. Combined broker/controller mode is a deployment option, not a requirement that the two roles share a pod. In Kubernetes, a pod is the scheduling/failure container; Kafka’s protocol names broker IDs, controller IDs, topic partitions, epochs and endpoints—not pods.</p>
+ <div class="table-scroll"><table><thead><tr><th>Inside a process</th><th>Execution / communication boundary</th><th>What not to assume</th></tr></thead><tbody><tr><td>Controller</td><td>KafkaRaftClientDriver polls the Raft client; QuorumController serializes control events through its event queue.</td><td>Each topic does not have a dedicated controller process or consensus thread.</td></tr><tr><td>Broker networking</td><td>Socket processors receive Kafka requests; request handlers route to KafkaApis and runtime components.</td><td>A handler need not block a network thread until replication finishes; completion is often deferred.</td></tr><tr><td>ReplicaManager / replica fetchers</td><td>Apply leader/follower transitions; followers issue broker-to-broker Fetch requests.</td><td>Replication is not the controller carrying every user record.</td></tr><tr><td>Group/share coordinator runtime</td><td>Keyed shard events, loader, timers, writer and high-watermark callbacks.</td><td>One group ≠ one thread ≠ one pod. A broker owns many shards/groups.</td></tr><tr><td>Transaction coordinator</td><td>Transaction state cache/locks, scheduler and marker channel manager/sender.</td><td>This checkout still has a distinct Scala transaction runtime; do not draw it as the same Java coordinator event loop.</td></tr><tr><td>Broker metadata cache</td><td>MetadataLoader builds images; BrokerMetadataPublisher applies them locally.</td><td>An image is a materialized view; the controller’s heap is not the only durable metadata copy.</td></tr></tbody></table></div>
+ <p>Client, inter-broker and controller listeners can have different addresses, ports and security configuration. The client bootstrap address is discovery, not a permanent proxy: Metadata and FindCoordinator responses tell it which advertised endpoint to contact. Every required endpoint must be reachable. Source/sink applications, including Flink TaskManagers, are separate Kafka clients.</p><p>Administrative control has another hop: in the normal broker-bootstrap path, KafkaApis forwards operations such as CreateTopics to the active controller through ForwardingManager and an Envelope request. Broker registration, heartbeats and AlterPartition use controller-facing control channels. Do not draw ordinary Produce/Fetch through this forwarding path, or assume a public client listener is interchangeable with a controller listener.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-raft-files">raft-files</a> <a class="cite" href="#ev-controller-commit">controller-commit</a> <a class="cite" href="#ev-broker-delta">broker-delta</a> <a class="cite" href="#ev-runtime-threads">runtime-threads</a> <a class="cite" href="#ev-txn-markers">txn-markers</a> <a class="cite" href="#ev-metadata-loader">metadata-loader</a> <a class="cite" href="#ev-controller-forward">controller-forward</a></div></section>
+<section id="metadata"><h2>3. What cluster metadata contains—and what it does not</h2>
+ <div class="table-scroll"><table><thead><tr><th>Store</th><th>Contains</th><th>Recover by</th></tr></thead><tbody><tr><td>KRaft __cluster_metadata-0 log + snapshots</td><td>Broker/controller registrations, topic IDs, replica assignments, partition leaders/epochs, ISR/ELR, configuration, ACLs and feature metadata.</td><td>Valid metadata snapshot plus subsequent committed log records; controller quorum replication.</td></tr><tr><td>Persistent quorum-state file</td><td>Local election state such as epoch/vote information.</td><td>Read on restart to preserve election safety; it is not a substitute for the metadata log.</td></tr><tr><td>Broker MetadataImage / cache</td><td>In-memory applied view used for routing, validation and local component updates.</td><td>Rebuild from metadata loader; lagging views cause stale-routing windows.</td></tr><tr><td>User/internal partition logs</td><td>Events, group state, transaction decisions and share state, depending on topic.</td><td>Surviving replicas and their log history; not reconstructed from controller metadata alone.</td></tr><tr><td>Local log indexes / producer snapshots</td><td>Offset/time/transaction indexes, producer sequence and transaction tracking.</td><td>Load/rebuild from retained log plus valid recovery metadata as supported.</td></tr><tr><td>Flink checkpoints</td><td>Source positions, operator state, sink recovery handles.</td><td>Flink’s own durable checkpoint/HA system, not KRaft or __consumer_offsets.</td></tr></tbody></table></div>
+ <p>The metadata log lives under the configured metadata log directory (with configuration-dependent fallback to a log directory). Snapshots bound metadata replay work; they do not back up all user data. Broker nodes consume metadata as non-voting observers unless also configured as controllers. Adding more broker-only nodes does not increase the controller voting majority.</p><p>Disk durability also differs by path: KafkaRaftManager configures controller-role nodes to flush the metadata log on replication. Do not generalize that into “every user-topic acks=all write fsyncs every disk.” User-record durability relies on replication plus configured storage/flush behavior and surviving copies.</p>
+ <figure class="diagram" id="recovery-metadata"><figcaption><h3>Metadata travels as a replicated log, then an image</h3><p>This is KRaft metadata propagation, not a legacy controller sending LeaderAndIsr for every change. Fetch arrows indicate pull replication; replies carry the records.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-metadata.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-metadata.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Metadata travels as a replicated log, then an image"><img src="diagrams/recovery-metadata.svg" alt="Metadata travels as a replicated log, then an image. This is KRaft metadata propagation, not a legacy controller sending LeaderAndIsr for every change. Fetch arrows indicate pull replication; replies carry the records." loading="lazy"></div></figure>
+ <p>On the active controller, a write event generates records and can update speculative in-memory state before commit. The commit listener advances stable state and releases operations waiting for that boundary. Standby controllers replay committed records. Leadership loss invokes renunciation and rollback to stable state. On brokers, MetadataLoader publishes deltas/images; BrokerMetadataPublisher updates the cache, ReplicaManager, and group/transaction/share coordinator election callbacks.</p>
+ <p>Do not confuse metadata-log offsets, a user partition’s high watermark, the transaction LSO, and a Flink checkpoint ID. Each belongs to a different ordering domain.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-raft-files">raft-files</a> <a class="cite" href="#ev-controller-commit">controller-commit</a> <a class="cite" href="#ev-controller-leader">controller-leader</a> <a class="cite" href="#ev-metadata-loader">metadata-loader</a> <a class="cite" href="#ev-metadata-snapshot">metadata-snapshot</a> <a class="cite" href="#ev-broker-publisher">broker-publisher</a></div></section>
+<section id="election"><h2>4. KRaft controller election, step by step</h2>
+ <figure class="diagram" id="recovery-election"><figcaption><h3>KRaft election: votes choose the controller</h3><p>Three controller voters; C1 fails. The inspected code has a prospective/pre-vote phase before a new election epoch. Exact wire support depends on the negotiated KRaft version.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-election.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-election.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: KRaft election: votes choose the controller"><img src="diagrams/recovery-election.svg" alt="KRaft election: votes choose the controller. Three controller voters; C1 fails. The inspected code has a prospective/pre-vote phase before a new election epoch. Exact wire support depends on the negotiated KRaft version." loading="lazy"></div></figure>
+ <ol><li>A voter loses timely contact with the leader and enters the election path. Randomized timeouts/backoff reduce repeated ties; failure detection is a suspicion, not proof of physical death.</li><li>The inspected implementation has a prospective/pre-vote phase. It tests support without treating every isolated node’s timeout as an immediately successful new leadership epoch. Wire compatibility is version-dependent.</li><li>A candidate persists its new election epoch and self-vote, then requests votes. Voters validate cluster/replica identity, epochs and the candidate’s last log epoch/offset. A voter does not simply choose the lowest broker ID.</li><li>A majority elects the candidate. With three voters, self plus one peer is sufficient; with five, three votes are required. Quorum intersection and log-freshness checks prevent a stale candidate from freely replacing committed history.</li><li>The leader announces BeginQuorumEpoch, writes a new-epoch control record, and serves follower Fetch. The committed boundary advances when the required voter replication progress is known. Election victory and recovery to useful service are distinct milestones.</li></ol>
+ <details class="qa"><summary>What happens in a 1–2 controller network split?</summary><p>Only the side with two of three voters can make fresh quorum progress. The isolated old leader cannot make metadata commits with itself alone and eventually resigns when majority contact is lost. Higher epochs reject stale authority. A successful new election still requires a sufficiently up-to-date eligible voter and working connectivity; the arithmetic alone does not guarantee instant recovery.</p></details>
+ <details class="qa"><summary>Are all Kafka replication acknowledgements majority acknowledgements?</summary><p>No. The controller metadata quorum uses majority consensus. Ordinary partition replication uses the ISR/high-watermark protocol and its topic settings. <code>acks=all</code> waits for the applicable in-sync replication boundary; <code>min.insync.replicas</code> is an admission/durability constraint, not “wait for exactly N replicas and ignore the rest.”</p></details>
+ <div class="refs">Source: <a class="cite" href="#ev-raft-vote">raft-vote</a> <a class="cite" href="#ev-raft-election">raft-election</a> <a class="cite" href="#ev-raft-state">raft-state</a> <a class="cite" href="#ev-raft-majority">raft-majority</a> <a class="cite" href="#ev-test-election">test-election</a> <a class="cite" href="#ev-test-quorum-loss">test-quorum-loss</a></div></section>
+<section id="partition-failure"><h2>5. Broker and partition-leader failure</h2>
+ <figure class="diagram" id="recovery-broker-failure"><figcaption><h3>A broker failure fans out into independent recoveries</h3><p>Example: B1 led a user partition and one group shard. Other transaction/share shards may live elsewhere and do not automatically move.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/recovery-broker-failure.svg" target="_blank">Full-size SVG</a><a href="diagrams/recovery-broker-failure.mmd">Mermaid source</a><span class="diagram-hint">Scroll within the diagram or open full size.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: A broker failure fans out into independent recoveries"><img src="diagrams/recovery-broker-failure.svg" alt="A broker failure fans out into independent recoveries. Example: B1 led a user partition and one group shard. Other transaction/share shards may live elsewhere and do not automatically move." loading="lazy"></div></figure>
+ <p>Example placement: <code>orders/P0</code> has replicas B1/B2/B3; B1 leads. B1 also leads <code>__consumer_offsets/P7</code>, but transaction T42 is owned by a shard led by B3. B1’s death can move orders/P0 and the group shard independently; it does not elect one replacement “master broker” for the whole cluster.</p>
+ <ol><li>Broker heartbeats to the controller stop. The controller’s broker-session expiry path generates fencing and affected partition changes.</li><li>The controller chooses an eligible leader and commits the metadata records through KRaft. Eligibility considers registration/fencing, replica state and election policy; a replica merely being reachable is insufficient.</li><li>Brokers pull/apply metadata. ReplicaManager changes local roles and follower-fetch relationships; epochs identify the new ownership generation. Returning replicas reconcile divergent tails and catch up before normal in-sync participation.</li><li>For an internal partition, BrokerMetadataPublisher also invokes the coordinator’s election/resignation hook. Loading/replaying a shard takes time after leader selection.</li><li>Clients see disconnects, stale-leader/coordinator errors or timeouts. They refresh routing and retry within their protocol. An old advertised endpoint, TLS failure or blocked inter-broker listener cannot be repaired by retries alone.</li></ol>
+ <p><strong>ELR caveat:</strong> this pinned checkout supports Eligible Leader Replicas. The code accepts ISR members, or tracked ELR members when ISR is empty, subject to availability checks. “Clean election always means current ISR only” is too narrow for this source. ELR is not permission to choose any stale replica. Unclean/last-known-leader recovery policies are separate, configuration- and version-sensitive choices that can lose data.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-broker-fence">broker-fence</a> <a class="cite" href="#ev-partition-election">partition-election</a> <a class="cite" href="#ev-broker-delta">broker-delta</a> <a class="cite" href="#ev-broker-publisher">broker-publisher</a> <a class="cite" href="#ev-broker-life">broker-life</a> <a class="cite" href="#ev-replica-truncate">replica-truncate</a> <a class="cite" href="#ev-test-elr">test-elr</a></div></section>
+<section id="failure-matrix"><h2>6. Failure matrix: safety is not the same as availability</h2>
+ <div class="table-scroll"><table><thead><tr><th>Failure / condition</th><th>What can continue</th><th>Recovery / hard limit</th></tr></thead><tbody><tr><td>One of three controller voters lost</td><td>Remaining majority can maintain metadata progress after election if needed.</td><td>Restore voter health; failover adds detection/election/catch-up latency.</td></tr><tr><td>Controller quorum lost</td><td>Already-established data paths may continue while their required leaders/ISR stay usable.</td><td>No reliable new metadata commits, leader reassignment, registration or ISR decisions; do not promise indefinite data availability.</td></tr><tr><td>One follower fails / falls behind</td><td>Leader may keep serving if replication requirements remain satisfied.</td><td>ISR changes require control-plane progress; replace/catch up replica.</td></tr><tr><td>Leader fails, eligible replicas survive</td><td>Other partitions remain independent; affected partition pauses.</td><td>Controller election decision, metadata propagation, leader catch-up and client retry.</td></tr><tr><td>No eligible leader, unclean election disabled</td><td>Unaffected partitions may work; this partition is unavailable.</td><td>Wait for a safe replica or repair infrastructure. Availability is sacrificed to avoid knowingly choosing stale data.</td></tr><tr><td>Only stale replicas remain; unclean election chosen</td><td>Partition may regain service.</td><td>Records previously acknowledged can be lost. Transactions do not undo this durability-policy choice.</td></tr><tr><td>ISR below required minimum</td><td>Reads of retained committed data may still work; required acks=all writes fail.</td><td>Repair replication. Lowering minimum ISR trades protection for availability.</td></tr><tr><td>Leader appended but response lost</td><td>The result is ambiguous to the client.</td><td>Use idempotent producer retries and protocol state; blindly creating a new business event can duplicate it.</td></tr><tr><td>Disk failure / corruption</td><td>Other healthy replicas may preserve availability and committed data.</td><td>Recover from trustworthy replicas; detect log-directory failures. Losing every valid copy is outside automatic replay.</td></tr><tr><td>Restarted broker / stale process</td><td>New incarnation registers and catches up; stale requests are rejected where epochs are checked.</td><td>Stable identity plus new registration epoch prevents treating an old incarnation as current.</td></tr><tr><td>Entire rack/AZ hosts all copies</td><td>A single failure domain can remove the quorum or every replica.</td><td>Replication count is not placement diversity. Model controller, data and internal-topic placement separately.</td></tr><tr><td>Topic deletion / retention / all-copy loss</td><td>No protocol can recreate missing required history from an offset or metadata entry.</td><td>Use backups/replay sources and an explicit disaster-recovery procedure; do not reformat controllers as routine failover.</td></tr></tbody></table></div>
+ <p>Illustrative durability exercise: RF=3, ISR={B1,B2,B3}, min ISR=2, acks=all. A write waits for the relevant ISR replication progress; it does not merely count any two broker responses. If ISR becomes {B1}, new writes with that requirement fail. The same protection must be considered for internal topics—three durable output replicas do not help if the transaction-decision log is unrecoverable.</p>
+ <div class="refs">Source: <a class="cite" href="#ev-broker-fence">broker-fence</a> <a class="cite" href="#ev-partition-election">partition-election</a> <a class="cite" href="#ev-raft-majority">raft-majority</a> <a class="cite" href="#ev-test-quorum-loss">test-quorum-loss</a> <a class="cite" href="#ev-txn-append">txn-append</a></div></section>
+<section id="tradeoffs"><h2>7. Performance and operational reasoning</h2>
+ <div class="table-scroll"><table><thead><tr><th>Lever</th><th>Improves</th><th>Costs / warning</th></tr></thead><tbody><tr><td>Separate controller resources and failure domains</td><td>Insulates metadata progress from broker GC, storage and network contention.</td><td>Extra processes and operational capacity; co-location changes correlated-failure risk.</td></tr><tr><td>More controller voters</td><td>Tolerates more voter failures with appropriate placement.</td><td>Higher quorum/network cost; even-sized groups do not add the next failure tolerance automatically.</td></tr><tr><td>Shorter failure-detection timeouts</td><td>Potentially faster failover.</td><td>More false suspicions during pauses or network jitter; churn can make tail latency worse.</td></tr><tr><td>More partitions / coordinator shards</td><td>Distributes leadership and per-shard work.</td><td>More metadata, files, connections, recovery tasks and scheduling overhead; hot keys still concentrate work.</td></tr><tr><td>Snapshotting / bounded replay</td><td>Reduces recovery replay volume.</td><td>Snapshot generation/storage work; snapshots are not cross-system backups.</td></tr><tr><td>Batching metadata/coordinator appends</td><td>Amortizes overhead and improves throughput.</td><td>Adds waiting time; the bottleneck may be the event queue, replication or storage, not CPU.</td></tr></tbody></table></div>
+ <pre class="guide-pre"><code>Recovery latency ≈ detect + elect/commit ownership + apply metadata
+                 + replay/catch up + client rediscovery/retry
+
+Controller availability: quorum of controller voters
+Partition availability: eligible leader + required replica progress
+Coordinator availability: backing partition + successful state loading
+Transaction visibility: decision + participant markers + LSO progress</code></pre>
+ <p>These are reasoning formulas, not measured benchmarks. Diagnose in that order: is there an active quorum, is ownership committed/applied, is the partition replicated, is the coordinator loaded, and is the client reaching the advertised owner?</p>
+ <p>Continue with <a href="kafka-group-share-coordinators.html">group and share coordinators</a>, then <a href="kafka-transaction-marker-recovery.html">transaction-marker crash windows</a>.</p></section>
+<section id="evidence"><h2>Source evidence, scope and validation gaps</h2><p>Source baseline: <a href="https://github.com/apache/kafka/tree/d2da6a18f839ce8b2eeb4db8e7515200258b0f81">Kafka d2da6a18f839ce8b2eeb4db8e7515200258b0f81</a>. Facts below were traced from this source snapshot. Test bodies were inspected as evidence; <strong>Kafka engine tests and live fault injection were not run</strong>. The validation report concerns the generated documentation, diagrams and links. Example placements and offsets are illustrative, not an observed deployment.</p><p>This is a modern KRaft/source-snapshot guide, not a guarantee for every Kafka release or feature level. It covers ordinary producer transactions and share acknowledgements, not the separate transactional-share development branch or every distributed-transaction API extension. Apache source excerpts are under the <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p><details class="code" id="ev-raft-vote"><summary>raft-vote · KafkaRaftClient.java:832</summary><p>Vote validates epochs, candidate log position and voter identity; pre-vote is a distinct mode.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L832">raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java</a></p><pre class="guide-pre"><code>832      private VoteResponseData handleVoteRequest(
+833          RaftRequest.Inbound requestMetadata
+834      ) {
+835          VoteRequestData request = (VoteRequestData) requestMetadata.data();
+836
+837          if (!hasValidClusterId(request.clusterId())) {
+838              return new VoteResponseData().setErrorCode(Errors.INCONSISTENT_CLUSTER_ID.code());
+839          }
+840
+841          if (!hasValidTopicPartition(request, log.topicPartition())) {
+842              // Until we support multi-raft, we treat individual topic partition mismatches as invalid requests
+843              return new VoteResponseData().setErrorCode(Errors.INVALID_REQUEST.code());
+844          }
+845
+846          VoteRequestData.PartitionData partitionRequest =
+847              request.topics().get(0).partitions().get(0);
+848
+849          int replicaId = partitionRequest.replicaId();
+850          int replicaEpoch = partitionRequest.replicaEpoch();
+851          boolean preVote = partitionRequest.preVote();
+852
+853          int lastEpoch = partitionRequest.lastOffsetEpoch();
+854          long lastEpochEndOffset = partitionRequest.lastOffset();
+855          /* Validate the replica epoch and the log's last epoch.
+856           *
+857           * For a standard vote, the candidate replica increases the epoch before sending a vote request.
+858           * So we expect the replicaEpoch to be strictly greater than the log's last epoch. This is always true because
+859           * the candidate has never seen a leader at replicaEpoch.</code></pre></details>
+<details class="code" id="ev-raft-election"><summary>raft-election · KafkaRaftClient.java:682</summary><p>A granted majority election advances a candidate to leader; a prospective candidate first advances through pre-vote.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L682">raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java</a></p><pre class="guide-pre"><code>682      private boolean maybeTransitionToLeader(CandidateState state, long currentTimeMs) {
+683          if (state.epochElection().isVoteGranted()) {
+684              onBecomeLeader(currentTimeMs);
+685              return true;
+686          } else {
+687              return false;
+688          }
+689      }
+690
+691      private boolean maybeTransitionToCandidate(ProspectiveState state, long currentTimeMs) {
+692          if (state.epochElection().isVoteGranted()) {
+693              transitionToCandidate(currentTimeMs);
+694              return true;
+695          } else {
+696              return false;
+697          }
+698      }
+699
+700      /**
+701       * Only applies to NomineeStates (Prospective or Candidate). If enough votes were granted
+702       * then this method is called to transition the state forward - either from Prospective to Candidate
+703       * or from Candidate to Leader.
+704       */
+705      private void maybeTransitionForward(NomineeState state, long currentTimeMs) {
+706          if (state instanceof ProspectiveState prospective) {
+707              maybeTransitionToCandidate(prospective, currentTimeMs);
+708          } else if (state instanceof CandidateState candidate) {
+709              maybeTransitionToLeader(candidate, currentTimeMs);</code></pre></details>
+<details class="code" id="ev-raft-state"><summary>raft-state · QuorumState.java:638</summary><p>Election epochs and voted state belong to the quorum state machine, not consumer-group membership.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/QuorumState.java#L638">raft/src/main/java/org/apache/kafka/raft/QuorumState.java</a></p><pre class="guide-pre"><code>638      public void transitionToCandidate() {
+639          checkValidTransitionToCandidate();
+640
+641          int newEpoch = epoch() + 1;
+642          int electionTimeoutMs = randomElectionTimeoutMs();
+643
+644          durableTransitionTo(new CandidateState(
+645              time,
+646              localIdOrThrow(),
+647              localDirectoryId,
+648              newEpoch,
+649              partitionState.lastVoterSet(),
+650              state.highWatermark(),
+651              electionTimeoutMs,
+652              logContext
+653          ));
+654      }
+655
+656      private void checkValidTransitionToCandidate() {
+657          if (isObserver()) {
+658              throw new IllegalStateException(
+659                  String.format(
+660                      &quot;Cannot transition to Candidate since the local id (%s) and directory id (%s) &quot; +
+661                      &quot;is not one of the voters %s&quot;,
+662                      localId,
+663                      localDirectoryId,
+664                      partitionState.lastVoterSet()
+665                  )</code></pre></details>
+<details class="code" id="ev-raft-files"><summary>raft-files · KafkaRaftManager.scala:138</summary><p>Metadata log, persistent election state, Raft client and driver are wired together.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/raft/KafkaRaftManager.scala#L138">core/src/main/scala/kafka/raft/KafkaRaftManager.scala</a></p><pre class="guide-pre"><code>138        new FileQuorumStateStore(new File(dataDir, FileQuorumStateStore.DEFAULT_FILE_NAME)),
+139        metrics,
+140        externalKRaftMetrics
+141      )
+142      netChannel.start()
+143      clientDriver.start()
+144    }
+145
+146    def shutdown(): Unit = {
+147      Utils.swallow(this.logger.underlying, () =&gt; expirationService.shutdown())
+148      Utils.closeQuietly(expirationTimer, &quot;expiration timer&quot;)
+149      Utils.swallow(this.logger.underlying, () =&gt; clientDriver.shutdown())
+150      Utils.swallow(this.logger.underlying, () =&gt; scheduler.shutdown())
+151      Utils.closeQuietly(netChannel, &quot;net channel&quot;)
+152      Utils.closeQuietly(raftLog, &quot;raft log&quot;)
+153      Utils.swallow(this.logger.underlying, () =&gt; dataDirLock.foreach(_.destroy()))
+154    }
+155
+156    override def handleRequest(
+157      context: RequestContext,
+158      header: RequestHeader,
+159      request: ApiMessage,
+160      createdTimeMs: Long
+161    ): CompletionStage[ApiMessage] = {
+162      clientDriver.handleRequest(context, header, request, createdTimeMs)
+163    }
+164
+165    private def buildRaftClient(): KafkaRaftClient[T] = {</code></pre></details>
+<details class="code" id="ev-raft-majority"><summary>raft-majority · LeaderState.java:660</summary><p>The metadata high watermark derives from voter replication positions.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/LeaderState.java#L660">raft/src/main/java/org/apache/kafka/raft/LeaderState.java</a></p><pre class="guide-pre"><code>660      private boolean maybeUpdateHighWatermark() {
+661          // Find the largest offset which is replicated to a majority of replicas (the leader counts)
+662          ArrayList&lt;ReplicaState&gt; followersByDescendingFetchOffset = followersByDescendingFetchOffset()
+663              .collect(Collectors.toCollection(ArrayList::new));
+664
+665          int indexOfHw = voterStates.size() / 2;
+666          Optional&lt;LogOffsetMetadata&gt; highWatermarkUpdateOpt = followersByDescendingFetchOffset.get(indexOfHw).endOffset;
+667
+668          if (highWatermarkUpdateOpt.isPresent()) {
+669
+670              // The KRaft protocol requires an extra condition on commitment after a leader
+671              // election. The leader must commit one record from its own epoch before it is
+672              // allowed to expose records from any previous epoch. This guarantees that its
+673              // log will contain the largest record (in terms of epoch/offset) in any log
+674              // which ensures that any future leader will have replicated this record as well
+675              // as all records from previous epochs that the current leader has committed.
+676
+677              LogOffsetMetadata highWatermarkUpdateMetadata = highWatermarkUpdateOpt.get();
+678              long highWatermarkUpdateOffset = highWatermarkUpdateMetadata.offset();
+679
+680              if (highWatermarkUpdateOffset &gt; epochStartOffset) {
+681                  if (highWatermark.isPresent()) {
+682                      LogOffsetMetadata currentHighWatermarkMetadata = highWatermark.get();
+683                      if (highWatermarkUpdateOffset &gt; currentHighWatermarkMetadata.offset()
+684                          || (highWatermarkUpdateOffset == currentHighWatermarkMetadata.offset() &amp;&amp;
+685                              !highWatermarkUpdateMetadata.metadata().equals(currentHighWatermarkMetadata.metadata()))) {
+686                          Optional&lt;LogOffsetMetadata&gt; oldHighWatermark = highWatermark;
+687                          highWatermark = highWatermarkUpdateOpt;</code></pre></details>
+<details class="code" id="ev-controller-commit"><summary>controller-commit · QuorumController.java:978</summary><p>Committed metadata advances controller completion; standby controllers replay records.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java#L978">metadata/src/main/java/org/apache/kafka/controller/QuorumController.java</a></p><pre class="guide-pre"><code>978          public void handleCommit(BatchReader&lt;ApiMessageAndVersion&gt; reader) {
+979              appendRaftEvent(&quot;handleCommit[baseOffset=&quot; + reader.baseOffset() + &quot;]&quot;, () -&gt; {
+980                  try {
+981                      boolean isActive = isActiveController();
+982                      while (reader.hasNext()) {
+983                          Batch&lt;ApiMessageAndVersion&gt; batch = reader.next();
+984                          long offset = batch.lastOffset();
+985                          int epoch = batch.epoch();
+986                          List&lt;ApiMessageAndVersion&gt; messages = batch.records();
+987
+988                          if (messages.isEmpty()) {
+989                              log.debug(&quot;Skipping handling commit for batch with no data records with offset {} and epoch {}.&quot;, offset, epoch);
+990                              offsetControl.handleCommitBatchMetrics(batch);
+991                          } else if (isActive) {
+992                              // If the controller is active, the records were already replayed,
+993                              // so we don't need to do it here.
+994                              log.debug(&quot;Completing purgatory items up to offset {} and epoch {}.&quot;, offset, epoch);
+995
+996                              // Advance the committed and stable offsets then complete any pending purgatory
+997                              // items that were waiting for these offsets.
+998                              offsetControl.handleCommitBatch(batch);
+999                              deferredEventQueue.completeUpTo(offsetControl.lastStableOffset());
+1000                          } else {
+1001                              // If the controller is a standby, replay the records that were
+1002                              // created by the active controller.
+1003                              if (log.isDebugEnabled()) {
+1004                                  log.debug(&quot;Replaying commits from the active node up to &quot; +
+1005                                      &quot;offset {} and epoch {}.&quot;, offset, epoch);</code></pre></details>
+<details class="code" id="ev-controller-leader"><summary>controller-leader · QuorumController.java:1107</summary><p>Raft leader changes claim or renounce controller authority; speculative state is not committed truth.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java#L1107">metadata/src/main/java/org/apache/kafka/controller/QuorumController.java</a></p><pre class="guide-pre"><code>1107          public void handleLeaderChange(LeaderAndEpoch newLeader) {
+1108              appendRaftEvent(&quot;handleLeaderChange[&quot; + newLeader.epoch() + &quot;]&quot;, () -&gt; {
+1109                  final String newLeaderName = newLeader.leaderId().isPresent() ?
+1110                          String.valueOf(newLeader.leaderId().getAsInt()) : &quot;(none)&quot;;
+1111                  if (newLeader.leaderId().isPresent()) {
+1112                      controllerMetrics.incrementNewActiveControllers();
+1113                  }
+1114                  if (isActiveController()) {
+1115                      if (newLeader.isLeader(nodeId)) {
+1116                          log.warn(&quot;We were the leader in epoch {}, and are still the leader &quot; +
+1117                                  &quot;in the new epoch {}.&quot;, curClaimEpoch, newLeader.epoch());
+1118                          curClaimEpoch = newLeader.epoch();
+1119                      } else {
+1120                          log.warn(&quot;Renouncing the leadership due to a metadata log event. &quot; +
+1121                              &quot;We were the leader at epoch {}, but in the new epoch {}, &quot; +
+1122                              &quot;the leader is {}. Reverting to last stable offset {}.&quot;,
+1123                              curClaimEpoch, newLeader.epoch(), newLeaderName,
+1124                              offsetControl.lastStableOffset());
+1125                          renounce();
+1126                      }
+1127                  } else if (newLeader.isLeader(nodeId)) {
+1128                      long newNextWriteOffset = raftClient.logEndOffset();
+1129                      log.info(&quot;Becoming the active controller at epoch {}, next write offset {}.&quot;,
+1130                          newLeader.epoch(), newNextWriteOffset);
+1131                      claim(newLeader.epoch(), newNextWriteOffset);
+1132                  } else {
+1133                      log.info(&quot;In the new epoch {}, the leader is {}.&quot;,
+1134                          newLeader.epoch(), newLeaderName);</code></pre></details>
+<details class="code" id="ev-metadata-loader"><summary>metadata-loader · MetadataLoader.java:396</summary><p>Committed metadata batches become deltas/images delivered to publishers.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java#L396">metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java</a></p><pre class="guide-pre"><code>396      public void handleCommit(BatchReader&lt;ApiMessageAndVersion&gt; reader) {
+397          eventQueue.append(() -&gt; {
+398              try (reader) {
+399                  while (reader.hasNext()) {
+400                      Batch&lt;ApiMessageAndVersion&gt; batch = reader.next();
+401                      loadControlRecords(batch);
+402                      long elapsedNs = batchLoader.loadBatch(batch, currentLeaderAndEpoch);
+403                      metrics.updateBatchSize(batch.records().size());
+404                      metrics.updateBatchProcessingTimeNs(elapsedNs);
+405                  }
+406                  batchLoader.maybeFlushBatches(currentLeaderAndEpoch, true);
+407              } catch (Throwable e) {
+408                  // This is a general catch-all block where we don't expect to end up;
+409                  // failure-prone operations should have individual try/catch blocks around them.
+410                  faultHandler.handleFault(&quot;Unhandled fault in MetadataLoader#handleCommit. &quot; +
+411                          &quot;Last image offset was &quot; + image.offset(), e);
+412              }
+413          });
+414      }
+415
+416      @Override
+417      public void handleLoadSnapshot(SnapshotReader&lt;ApiMessageAndVersion&gt; reader) {
+418          eventQueue.append(() -&gt; {
+419              try {
+420                  long numLoaded = metrics.incrementHandleLoadSnapshotCount();
+421                  String snapshotName = Snapshots.filenameFromSnapshotId(reader.snapshotId());
+422                  log.info(&quot;handleLoadSnapshot({}): incrementing HandleLoadSnapshotCount to {}.&quot;,
+423                      snapshotName, numLoaded);</code></pre></details>
+<details class="code" id="ev-metadata-snapshot"><summary>metadata-snapshot · MetadataLoader.java:417</summary><p>Snapshot load reconstructs metadata independently of user-topic record data.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java#L417">metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java</a></p><pre class="guide-pre"><code>417      public void handleLoadSnapshot(SnapshotReader&lt;ApiMessageAndVersion&gt; reader) {
+418          eventQueue.append(() -&gt; {
+419              try {
+420                  long numLoaded = metrics.incrementHandleLoadSnapshotCount();
+421                  String snapshotName = Snapshots.filenameFromSnapshotId(reader.snapshotId());
+422                  log.info(&quot;handleLoadSnapshot({}): incrementing HandleLoadSnapshotCount to {}.&quot;,
+423                      snapshotName, numLoaded);
+424                  MetadataDelta delta = new MetadataDelta.Builder().
+425                      setImage(image).
+426                      setSupportedConfigChecker(supportedConfigChecker).
+427                      build();
+428                  SnapshotManifest manifest = loadSnapshot(delta, reader);
+429                  log.info(&quot;handleLoadSnapshot({}): generated a metadata delta between offset {} &quot; +
+430                          &quot;and this snapshot in {} us.&quot;, snapshotName,
+431                          image.provenance().lastContainedOffset(),
+432                          NANOSECONDS.toMicros(manifest.elapsedNs()));
+433                  MetadataImage image = delta.apply(manifest.provenance());
+434                  batchLoader.resetToImage(image);
+435                  maybePublishMetadata(delta, image, manifest);
+436              } catch (Throwable e) {
+437                  // This is a general catch-all block where we don't expect to end up;
+438                  // failure-prone operations should have individual try/catch blocks around them.
+439                  faultHandler.handleFault(&quot;Unhandled fault in MetadataLoader#handleLoadSnapshot. &quot; +
+440                          &quot;Snapshot offset was &quot; + reader.lastContainedLogOffset(), e);
+441              } finally {
+442                  reader.close();
+443              }
+444          });</code></pre></details>
+<details class="code" id="ev-broker-publisher"><summary>broker-publisher · BrokerMetadataPublisher.scala:112</summary><p>A broker updates its metadata cache, replica roles, and each internal-topic coordinator from metadata deltas.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala#L112">core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala</a></p><pre class="guide-pre"><code>112    override def onMetadataUpdate(
+113      delta: MetadataDelta,
+114      newImage: MetadataImage,
+115      manifest: LoaderManifest
+116    ): Unit = {
+117      val highestOffsetAndEpoch = newImage.highestOffsetAndEpoch()
+118
+119      val deltaName = if (_firstPublish) {
+120        s&quot;initial MetadataDelta up to ${highestOffsetAndEpoch.offset}&quot;
+121      } else {
+122        s&quot;MetadataDelta up to ${highestOffsetAndEpoch.offset}&quot;
+123      }
+124      try {
+125        if (isTraceEnabled) {
+126          trace(s&quot;Publishing delta $delta with highest offset $highestOffsetAndEpoch&quot;)
+127        }
+128
+129        // Publish the new metadata image to the metadata cache.
+130        metadataCache.setImage(newImage)
+131
+132        def metadataVersionLogMsg = s&quot;metadata.version ${newImage.features().metadataVersion()}&quot;
+133
+134        if (_firstPublish) {
+135          info(s&quot;Publishing initial metadata at offset $highestOffsetAndEpoch with $metadataVersionLogMsg.&quot;)
+136
+137          // If this is the first metadata update we are applying, initialize the managers
+138          // first (but after setting up the metadata cache).
+139          initializeManagers(newImage)</code></pre></details>
+<details class="code" id="ev-broker-fence"><summary>broker-fence · ReplicationControlManager.java:1738</summary><p>Expired broker sessions generate committed fencing and leadership changes.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/ReplicationControlManager.java#L1738">metadata/src/main/java/org/apache/kafka/controller/ReplicationControlManager.java</a></p><pre class="guide-pre"><code>1738      ControllerResult&lt;Boolean&gt; maybeFenceOneStaleBroker() {
+1739          BrokerHeartbeatManager heartbeatManager = clusterControl.heartbeatManager();
+1740          Optional&lt;BrokerIdAndEpoch&gt; idAndEpoch = heartbeatManager.tracker().maybeRemoveExpired();
+1741          if (idAndEpoch.isEmpty()) {
+1742              log.debug(&quot;No stale brokers found.&quot;);
+1743              return ControllerResult.of(List.of(), false);
+1744          }
+1745          int id = idAndEpoch.get().id();
+1746          long epoch = idAndEpoch.get().epoch();
+1747          if (!clusterControl.brokerRegistrations().containsKey(id)) {
+1748              log.info(&quot;Removing heartbeat tracker entry for unknown broker {} at epoch {}.&quot;,
+1749                      id, epoch);
+1750              heartbeatManager.remove(id);
+1751              return ControllerResult.of(List.of(), true);
+1752          } else if (clusterControl.brokerRegistrations().get(id).epoch() != epoch) {
+1753              log.info(&quot;Removing heartbeat tracker entry for broker {} at previous epoch {}. &quot; +
+1754                  &quot;Current epoch is {}&quot;, id, epoch,
+1755                  clusterControl.brokerRegistrations().get(id).epoch());
+1756              return ControllerResult.of(List.of(), true);
+1757          }
+1758          // Even though multiple brokers can go stale at a time, we will process
+1759          // fencing one at a time so that the effect of fencing each broker is visible
+1760          // to the system prior to processing the next one.
+1761          log.info(&quot;Fencing broker {} at epoch {} because its session has timed out.&quot;, id, epoch);
+1762          List&lt;ApiMessageAndVersion&gt; records = new ArrayList&lt;&gt;();
+1763          handleBrokerFenced(id, records);
+1764          heartbeatManager.fence(id);
+1765          return ControllerResult.of(records, true);</code></pre></details>
+<details class="code" id="ev-partition-election"><summary>partition-election · PartitionChangeBuilder.java:318</summary><p>Clean eligibility includes ISR, or tracked ELR when ISR is empty; not arbitrary out-of-sync replicas.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/PartitionChangeBuilder.java#L318">metadata/src/main/java/org/apache/kafka/controller/PartitionChangeBuilder.java</a></p><pre class="guide-pre"><code>318      private boolean isValidNewLeader(int replica) {
+319          // The valid new leader should be in either ISR or in ELR when ISR is empty.
+320          return (targetIsr.contains(replica) || (targetIsr.isEmpty() &amp;&amp; targetElr.contains(replica))) &amp;&amp;
+321              isAcceptableLeader.test(replica);
+322      }
+323
+324      private void tryElection(PartitionChangeRecord record) {
+325          ElectionResult electionResult = electLeader();
+326          if (electionResult.node != partition.leader) {
+327              // generating log messages for partition elections can get expensive on large clusters,
+328              // so only log clean elections at TRACE level; log unclean elections at INFO level
+329              // to ensure the message is emitted since an unclean election can lead to data loss;
+330              if (targetElr.contains(electionResult.node)) {
+331                  targetIsr = List.of(electionResult.node);
+332                  targetElr = targetElr.stream().filter(replica -&gt; replica != electionResult.node)
+333                      .collect(Collectors.toList());
+334                  log.info(&quot;Setting new leader for topicId {}, partition {} to {} using ELR. Previous partition: {}, change record: {}&quot;,
+335                          topicId, partitionId, electionResult.node, partition, record);
+336              } else if (electionResult.unclean) {
+337                  log.info(&quot;Setting new leader for topicId {}, partition {} to {} using an unclean election. Previous partition: {}, change record: {}&quot;,
+338                      topicId, partitionId, electionResult.node, partition, record);
+339              } else {
+340                  log.trace(&quot;Setting new leader for topicId {}, partition {} to {} using a clean election&quot;,
+341                      topicId, partitionId, electionResult.node);
+342              }
+343              record.setLeader(electionResult.node);
+344              if (electionResult.unclean) {
+345                  // If the election was unclean, we have to forcibly set the ISR to just the</code></pre></details>
+<details class="code" id="ev-broker-delta"><summary>broker-delta · ReplicaManager.scala:2360</summary><p>ReplicaManager applies metadata changes to local partition leadership and replication.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/ReplicaManager.scala#L2360">core/src/main/scala/kafka/server/ReplicaManager.scala</a></p><pre class="guide-pre"><code>2360    def applyDelta(delta: TopicsDelta, newImage: MetadataImage): Unit = {
+2361      // Before taking the lock, compute the local changes
+2362      val localChanges = delta.localChanges(config.nodeId)
+2363      val metadataVersion = newImage.features().metadataVersionOrThrow()
+2364
+2365      replicaStateChangeLock.synchronized {
+2366        // Handle deleted partitions. We need to do this first because we might subsequently
+2367        // create new partitions with the same names as the ones we are deleting here.
+2368        if (!localChanges.deletes.isEmpty) {
+2369          val deletes = localChanges.deletes.asScala
+2370            .map { tp =&gt;
+2371              val isCurrentLeader = Option(delta.image().getTopic(tp.topic()))
+2372                .map(image =&gt; image.partitions().get(tp.partition()))
+2373                .exists(partition =&gt; partition.leader == config.nodeId)
+2374              val deleteRemoteLog = delta.topicWasDeleted(tp.topic()) &amp;&amp; isCurrentLeader
+2375              new StopPartition(tp, true, deleteRemoteLog, false)
+2376            }
+2377            .toSet
+2378          stateChangeLogger.info(s&quot;Deleting ${deletes.size} partition(s).&quot;)
+2379          stopPartitions(deletes).foreachEntry { (topicPartition, e) =&gt;
+2380            if (e.isInstanceOf[KafkaStorageException]) {
+2381              stateChangeLogger.error(s&quot;Unable to delete replica $topicPartition because &quot; +
+2382                &quot;the local replica for the partition is in an offline log directory&quot;)
+2383            } else {
+2384              stateChangeLogger.error(s&quot;Unable to delete replica $topicPartition because &quot; +
+2385                s&quot;we got an unexpected ${e.getClass.getName} exception: ${e.getMessage}&quot;)
+2386            }
+2387          }</code></pre></details>
+<details class="code" id="ev-controller-forward"><summary>controller-forward · ForwardingManagerImpl.java:60</summary><p>Broker forwarding wraps appropriate administrative requests for the active controller.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/ForwardingManagerImpl.java#L60">server/src/main/java/org/apache/kafka/server/ForwardingManagerImpl.java</a></p><pre class="guide-pre"><code>60      public void forwardRequest(
+61              RequestContext requestContext,
+62              ByteBuffer requestBufferCopy,
+63              long requestCreationNs,
+64              AbstractRequest requestBody,
+65              Supplier&lt;String&gt; requestToString,
+66              Consumer&lt;Optional&lt;AbstractResponse&gt;&gt; responseCallback) {
+67          EnvelopeRequest.Builder envelopeRequest = ForwardingManagerUtil.buildEnvelopeRequest(requestContext, requestBufferCopy);
+68          long requestCreationTimeMs = TimeUnit.NANOSECONDS.toMillis(requestCreationNs);
+69
+70          class ForwardingResponseHandler implements ControllerRequestCompletionHandler {
+71
+72              @Override
+73              public void onComplete(ClientResponse clientResponse) {
+74                  forwardingManagerMetrics.decrementQueueLength();
+75                  forwardingManagerMetrics.remoteTimeMsHist().record(clientResponse.requestLatencyMs());
+76                  forwardingManagerMetrics.queueTimeMsHist().record(clientResponse.receivedTimeMs() - clientResponse.requestLatencyMs() - requestCreationTimeMs);
+77
+78                  if (clientResponse.versionMismatch() != null) {
+79                      LOG.debug(&quot;Returning `UNKNOWN_SERVER_ERROR` in response to {} due to unexpected version error&quot;,
+80                              requestToString.get(), clientResponse.versionMismatch());
+81                      responseCallback.accept(Optional.of(requestBody.getErrorResponse(Errors.UNKNOWN_SERVER_ERROR.exception())));
+82                  } else if (clientResponse.authenticationException() != null) {
+83                      LOG.debug(&quot;Returning `UNKNOWN_SERVER_ERROR` in response to {} due to authentication error&quot;,
+84                              requestToString.get(), clientResponse.authenticationException());
+85                      responseCallback.accept(Optional.of(requestBody.getErrorResponse(Errors.UNKNOWN_SERVER_ERROR.exception())));
+86                  } else {
+87                      EnvelopeResponse envelopeResponse = (EnvelopeResponse) clientResponse.responseBody();</code></pre></details>
+<details class="code" id="ev-broker-life"><summary>broker-life · BrokerLifecycleManager.java:75</summary><p>Broker registration, heartbeats, fencing and shutdown are a separate lifecycle state machine.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/BrokerLifecycleManager.java#L75">server/src/main/java/org/apache/kafka/server/BrokerLifecycleManager.java</a></p><pre class="guide-pre"><code>75  public class BrokerLifecycleManager {
+76
+77      private final Logger logger;
+78      private final KafkaEventQueue eventQueue;
+79      private final AbstractKafkaConfig config;
+80      private final Time time;
+81      private final Map&lt;String, Uuid&gt; logDirs;
+82      private final Runnable shutdownHook;
+83      private final Supplier&lt;Boolean&gt; cordonedLogDirsSupported;
+84
+85      /**
+86       * The broker id.
+87       */
+88      private final int nodeId;
+89
+90      /**
+91       * The broker rack, or null if there is no configured rack.
+92       */
+93      private final Optional&lt;String&gt; rack;
+94
+95      /**
+96       * How long to wait for registration to succeed before failing the startup process.
+97       */
+98      private final long initialTimeoutNs;
+99
+100      /**
+101       * The broker incarnation ID.  This ID uniquely identifies each time we start the broker
+102       */</code></pre></details>
+<details class="code" id="ev-group-route"><summary>group-route · GroupCoordinatorService.java:459</summary><p>Group ID hashes to __consumer_offsets; its leader owns the group shard.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L459">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java</a></p><pre class="guide-pre"><code>459      public int partitionFor(
+460          String groupId
+461      ) {
+462          throwIfNotActive();
+463          return Utils.abs(groupId.hashCode()) % numPartitions;
+464      }
+465
+466      /**
+467       * Validates the request.
+468       *
+469       * @param request The request to validate.
+470       * @param apiVersion The version of ConsumerGroupHeartbeat RPC
+471       * @throws InvalidRequestException if the request is not valid.
+472       * @throws UnsupportedAssignorException if the assignor is not supported.
+473       */
+474      private void throwIfConsumerGroupHeartbeatRequestIsInvalid(
+475          ConsumerGroupHeartbeatRequestData request,
+476          int apiVersion
+477      ) throws InvalidRequestException, UnsupportedAssignorException {
+478          if (apiVersion &gt;= CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION ||
+479              request.memberEpoch() &gt; 0 ||
+480              request.memberEpoch() == LEAVE_GROUP_MEMBER_EPOCH
+481          ) {
+482              throwIfEmptyString(request.memberId(), &quot;MemberId can't be empty.&quot;);
+483          }
+484
+485          throwIfEmptyString(request.groupId(), &quot;GroupId can't be empty.&quot;);
+486          throwIfEmptyString(request.instanceId(), &quot;InstanceId can't be empty.&quot;);</code></pre></details>
+<details class="code" id="ev-runtime-threads"><summary>runtime-threads · MultiThreadedEventProcessor.java:36</summary><p>A keyed event processor supports many shards; not one dedicated thread/pod per group.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java#L36">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java</a></p><pre class="guide-pre"><code>36  public final class MultiThreadedEventProcessor implements CoordinatorEventProcessor {
+37
+38      /**
+39       * The poll timeout to wait for an event by the EventProcessorThread.
+40       */
+41      private static final long POLL_TIMEOUT_MS = 300L;
+42
+43      /**
+44       * The logger.
+45       */
+46      private final Logger log;
+47
+48      /**
+49       * The accumulator.
+50       */
+51      private final EventAccumulator&lt;TopicPartition, CoordinatorEvent&gt; accumulator;
+52
+53      /**
+54       * The processing threads.
+55       */
+56      private final List&lt;EventProcessorThread&gt; threads;
+57
+58      /**
+59       * A boolean indicated whether the event processor is shutting down.
+60       */
+61      private volatile boolean shuttingDown;
+62
+63      /**</code></pre></details>
+<details class="code" id="ev-share-route"><summary>share-route · ShareCoordinatorService.java:282</summary><p>Share state is routed by the canonical group/topic-ID/partition key, not group ID alone.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java#L282">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java</a></p><pre class="guide-pre"><code>282      public int partitionFor(SharePartitionKey key) {
+283          throwIfNotActive();
+284          // Call to asCoordinatorKey is necessary as we depend only on topicId (Uuid) and
+285          // not topic name. We do not want this calculation to distinguish between 2
+286          // SharePartitionKeys where everything except topic name is the same.
+287          return Utils.abs(key.asCoordinatorKey().hashCode()) % numPartitions;
+288      }
+289
+290      @Override
+291      public Map&lt;String, String&gt; shareGroupStateTopicConfigs() {
+292          // As defined in KIP-932.
+293          return Map.of(
+294              TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_DELETE,
+295              TopicConfig.COMPRESSION_TYPE_CONFIG, BrokerCompressionType.PRODUCER.name,
+296              TopicConfig.SEGMENT_BYTES_CONFIG, String.valueOf(config.shareCoordinatorStateTopicSegmentBytes()),
+297              TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, String.valueOf(config.shareCoordinatorStateTopicMinIsr()),
+298              TopicConfig.RETENTION_MS_CONFIG, &quot;-1&quot;
+299          );
+300      }
+301
+302      /**
+303       * The share coordinator startup method will get invoked from BrokerMetadataPublisher.
+304       * At the time of writing, the publisher uses metadata cache to fetch the number of partitions
+305       * of the share state topic. In case this information is not available, the user provided
+306       * config will be used to fetch the value.
+307       * This is consistent with the group coordinator startup functionality.
+308       *
+309       * @param shareGroupTopicPartitionCount - supplier returning the number of partitions for __share_group_state topic</code></pre></details>
+<details class="code" id="ev-txn-route"><summary>txn-route · TransactionStateManager.scala:439</summary><p>Transactional ID hashes to a __transaction_state partition.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L439">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>439    def partitionFor(transactionalId: String): Int = Utils.abs(transactionalId.hashCode) % transactionTopicPartitionCount
+440
+441    private def loadTransactionMetadata(topicPartition: TopicPartition, coordinatorEpoch: Int): ConcurrentMap[String, TransactionMetadata] =  {
+442      def logEndOffset = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
+443
+444      val loadedTransactions = new ConcurrentHashMap[String, TransactionMetadata]
+445
+446      replicaManager.getLog(topicPartition) match {
+447        case None =&gt;
+448          warn(s&quot;Attempted to load transaction metadata from $topicPartition, but found no log&quot;)
+449
+450        case Some(log) =&gt;
+451          // buffer may not be needed if records are read from memory
+452          var buffer = ByteBuffer.allocate(0)
+453
+454          // loop breaks if leader changes at any time during the load, since logEndOffset is -1
+455          var currOffset = log.logStartOffset
+456
+457          // loop breaks if no records have been read, since the end of the log has been reached
+458          var readAtLeastOneRecord = true
+459
+460          try {
+461            while (currOffset &lt; logEndOffset &amp;&amp; readAtLeastOneRecord &amp;&amp; !shuttingDown.get() &amp;&amp; inReadLock(stateLock, () =&gt; {
+462              loadingPartitions.exists { idAndEpoch: TransactionPartitionAndLeaderEpoch =&gt;
+463                idAndEpoch.txnPartitionId == topicPartition.partition &amp;&amp; idAndEpoch.coordinatorEpoch == coordinatorEpoch}})) {
+464              val fetchDataInfo = log.read(currOffset, config.transactionLogLoadBufferSize, FetchIsolation.LOG_END, true)
+465
+466              readAtLeastOneRecord = fetchDataInfo.records.sizeInBytes &gt; 0</code></pre></details>
+<details class="code" id="ev-replica-truncate"><summary>replica-truncate · AbstractFetcherThread.scala:209</summary><p>Returning followers reconcile log history using epoch end offsets; divergence is not silently retained.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/AbstractFetcherThread.scala#L209">core/src/main/scala/kafka/server/AbstractFetcherThread.scala</a></p><pre class="guide-pre"><code>209    private def truncateToEpochEndOffsets(latestEpochsForPartitions: Map[TopicPartition, EpochData]): Unit = {
+210      val endOffsets = leader.fetchEpochEndOffsets(latestEpochsForPartitions.asJava)
+211      // Ensure we hold a lock during truncation
+212
+213      LockUtils.inLock[Exception](partitionMapLock, () =&gt; {
+214        //Check no leadership and no leader epoch changes happened whilst we were unlocked, fetching epochs
+215
+216        val epochEndOffsets = endOffsets.asScala.filter { case (tp, _) =&gt;
+217          val curPartitionState = partitionStates.stateValue(tp)
+218          val partitionEpochRequest = latestEpochsForPartitions.getOrElse(tp, {
+219            throw new IllegalStateException(
+220              s&quot;Leader replied with partition $tp not requested in OffsetsForLeaderEpoch request&quot;)
+221          })
+222          val leaderEpochInRequest = partitionEpochRequest.currentLeaderEpoch
+223          curPartitionState != null &amp;&amp; leaderEpochInRequest == curPartitionState.currentLeaderEpoch
+224        }
+225
+226        val result = maybeTruncateToEpochEndOffsets(epochEndOffsets, latestEpochsForPartitions)
+227        handlePartitionsWithErrors(result.partitionsWithError.asScala, &quot;truncateToEpochEndOffsets&quot;)
+228        updateFetchOffsetAndMaybeMarkTruncationComplete(result.result)
+229      })
+230    }
+231
+232    // Visibility for unit tests
+233    protected[server] def truncateOnFetchResponse(epochEndOffsets: Map[TopicPartition, EpochEndOffset]): Unit = {
+234      LockUtils.inLock[Exception](partitionMapLock, () =&gt; {
+235        val result = maybeTruncateToEpochEndOffsets(epochEndOffsets, Map.empty)
+236        handlePartitionsWithErrors(result.partitionsWithError.asScala, &quot;truncateOnFetchResponse&quot;)</code></pre></details>
+<details class="code" id="ev-txn-append"><summary>txn-append · TransactionStateManager.scala:648</summary><p>Transaction metadata is replicated through the ordinary log append path, with ownership checks.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L648">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala</a></p><pre class="guide-pre"><code>648    def appendTransactionToLog(transactionalId: String,
+649                               coordinatorEpoch: Int,
+650                               newMetadata: TxnTransitMetadata,
+651                               responseCallback: Errors =&gt; Unit,
+652                               retryOnError: Errors =&gt; Boolean = _ =&gt; false,
+653                               requestLocal: RequestLocal): Unit = {
+654
+655      // generate the message for this transaction metadata
+656      val keyBytes = TransactionLog.keyToBytes(transactionalId)
+657      val valueBytes = TransactionLog.valueToBytes(newMetadata, transactionVersionLevel())
+658      val timestamp = time.milliseconds()
+659
+660      val records = MemoryRecords.withRecords(Compression.NONE, new SimpleRecord(timestamp, keyBytes, valueBytes))
+661      val transactionStateTopicPartition = new TopicPartition(Topic.TRANSACTION_STATE_TOPIC_NAME, partitionFor(transactionalId))
+662      val transactionStateTopicIdPartition = replicaManager.topicIdPartition(transactionStateTopicPartition)
+663      val recordsPerPartition = Map(transactionStateTopicIdPartition -&gt; records)
+664
+665      // set the callback function to update transaction status in cache after log append completed
+666      def updateCacheCallback(responseStatus: util.Map[TopicIdPartition, PartitionResponse]): Unit = {
+667        // the append response should only contain the topics partition
+668        if (responseStatus.size != 1 || !responseStatus.containsKey(transactionStateTopicIdPartition))
+669          throw new IllegalStateException(&quot;Append status %s should only have one partition %s&quot;
+670            .format(responseStatus, transactionStateTopicPartition))
+671
+672        val status = responseStatus.get(transactionStateTopicIdPartition)
+673
+674        var responseError = if (status.error == Errors.NONE) {
+675          Errors.NONE</code></pre></details>
+<details class="code" id="ev-txn-markers"><summary>txn-markers · TransactionMarkerChannelManager.scala:270</summary><p>Marker work is grouped by current participant leaders; completion follows removal of pending participants.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala#L270">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala</a></p><pre class="guide-pre"><code>270    def addTxnMarkersToSend(coordinatorEpoch: Int,
+271                            txnResult: TransactionResult,
+272                            txnMetadata: TransactionMetadata,
+273                            newMetadata: TxnTransitMetadata): Unit = {
+274      val transactionalId = txnMetadata.transactionalId
+275      val pendingCompleteTxn = new PendingCompleteTxn(
+276        transactionalId,
+277        coordinatorEpoch,
+278        txnMetadata,
+279        newMetadata)
+280
+281      val prev = transactionsWithPendingMarkers.put(transactionalId, pendingCompleteTxn)
+282      if (prev != null) {
+283        info(s&quot;Replaced an existing pending complete txn $prev with $pendingCompleteTxn while adding markers to send.&quot;)
+284      }
+285      addTxnMarkersToBrokerQueue(txnMetadata.producerId,
+286        txnMetadata.producerEpoch, txnResult, pendingCompleteTxn, txnMetadata.topicPartitions.asScala.toSet)
+287      maybeWriteTxnCompletion(transactionalId)
+288    }
+289
+290    def numTxnsWithPendingMarkers: Int = transactionsWithPendingMarkers.size
+291
+292    private def hasPendingMarkersToWrite(txnMetadata: TransactionMetadata): Boolean = {
+293      txnMetadata.inLock(() =&gt;
+294        !txnMetadata.topicPartitions.isEmpty
+295      )
+296    }
+297</code></pre></details>
+<details class="code" id="ev-test-election"><summary>test-election · KafkaRaftClientTest.java:975</summary><p>Inspected test: self vote plus one peer elects a leader in a three-voter quorum.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java#L975">raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java</a></p><pre class="guide-pre"><code>975      public void testInitializeAsCandidateAndBecomeLeaderQuorumOfThree(boolean withKip853Rpc) throws Exception {
+976          int localId = randomReplicaId();
+977          final int firstNodeId = localId + 1;
+978          final int secondNodeId = localId + 2;
+979          Set&lt;Integer&gt; voters = Set.of(localId, firstNodeId, secondNodeId);
+980          RaftClientTestContext context = new RaftClientTestContext.Builder(localId, voters)
+981              .withVotedCandidate(2, ReplicaKey.of(localId, ReplicaKey.NO_DIRECTORY_ID))
+982              .withKip853Rpc(withKip853Rpc)
+983              .build();
+984          assertTrue(context.client.quorum().isCandidate());
+985          context.pollUntilRequest();
+986          context.assertVotedCandidate(2, localId);
+987
+988          RaftRequest.Outbound request = context.assertSentVoteRequest(2, 0, 0L, 2);
+989          context.deliverResponse(
+990              request.correlationId(),
+991              request.destination(),
+992              context.voteResponse(true, OptionalInt.empty(), 2)
+993          );
+994
+995          VoteRequestData voteRequest = (VoteRequestData) request.data();
+996          int voterId = voteRequest.voterId();
+997          assertNotEquals(localId, voterId);
+998
+999          // Become leader after receiving the vote
+1000          context.pollUntil(() -&gt; context.log.endOffset().offset() == 1L);
+1001          context.assertElectedLeader(2, localId);
+1002          long electionTimestamp = context.time.milliseconds();</code></pre></details>
+<details class="code" id="ev-test-quorum-loss"><summary>test-quorum-loss · KafkaRaftClientTest.java:685</summary><p>Test covers leader resignation after losing majority contact.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java#L685">raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java</a></p><pre class="guide-pre"><code>685      public void testLeaderShouldResignLeadershipIfNotGetFetchRequestFromMajorityVoters(boolean withKip853Rpc) throws Exception {
+686          int localId = randomReplicaId();
+687          int remoteId1 = localId + 1;
+688          int remoteId2 = localId + 2;
+689          int observerId = localId + 3;
+690          ReplicaKey remoteKey1 = replicaKey(remoteId1, withKip853Rpc);
+691          ReplicaKey remoteKey2 = replicaKey(remoteId2, withKip853Rpc);
+692          ReplicaKey observerKey3 = replicaKey(observerId, withKip853Rpc);
+693          Set&lt;Integer&gt; voters = Set.of(localId, remoteKey1.id(), remoteKey2.id());
+694
+695          RaftClientTestContext context = new RaftClientTestContext.Builder(localId, voters)
+696              .withKip853Rpc(withKip853Rpc)
+697              .build();
+698          int resignLeadershipTimeout = context.checkQuorumTimeoutMs;
+699
+700          context.unattachedToLeader();
+701          int epoch = context.currentEpoch();
+702          assertEquals(OptionalInt.of(localId), context.currentLeader());
+703
+704          // fetch timeout is not expired, the leader should not get resigned
+705          context.time.sleep(resignLeadershipTimeout / 2);
+706          context.poll();
+707
+708          assertFalse(context.client.quorum().isResigned());
+709
+710          // Received fetch request from a voter, the fetch timer should be reset.
+711          context.deliverRequest(context.fetchRequest(epoch, remoteKey1, 0, 0, 0));
+712          context.pollUntilRequest();</code></pre></details>
+<details class="code" id="ev-test-elr"><summary>test-elr · ReplicationControlManagerTest.java:1231</summary><p>Inspected test: a tracked ELR can recover leadership when ISR is empty.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/test/java/org/apache/kafka/controller/ReplicationControlManagerTest.java#L1231">metadata/src/test/java/org/apache/kafka/controller/ReplicationControlManagerTest.java</a></p><pre class="guide-pre"><code>1231      public void testEligibleLeaderReplicas_CleanElection() {
+1232          ReplicationControlTestContext ctx = new ReplicationControlTestContext.Builder()
+1233              .setIsElrEnabled(true)
+1234              .build();
+1235          ReplicationControlManager replicationControl = ctx.replicationControl;
+1236          ctx.registerBrokers(0, 1, 2, 3);
+1237          ctx.unfenceBrokers(0, 1, 2, 3);
+1238          CreatableTopicResult createTopicResult = ctx.createTestTopic(&quot;foo&quot;,
+1239                  new int[][] {new int[] {0, 1, 2, 3}});
+1240
+1241          TopicIdPartition topicIdPartition = new TopicIdPartition(createTopicResult.topicId(), 0);
+1242          assertEquals(OptionalInt.of(0), ctx.currentLeader(topicIdPartition));
+1243          ctx.alterTopicConfig(&quot;foo&quot;, TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, &quot;3&quot;);
+1244
+1245          ctx.fenceBrokers(Set.of(1, 2, 3));
+1246
+1247          PartitionRegistration partition = replicationControl.getPartition(topicIdPartition.topicId(), topicIdPartition.partitionId());
+1248          assertArrayEquals(new int[]{2, 3}, partition.elr, partition.toString());
+1249          assertArrayEquals(new int[]{}, partition.lastKnownElr, partition.toString());
+1250
+1251          ctx.unfenceBrokers(2);
+1252          ctx.fenceBrokers(Set.of(0, 1));
+1253          partition = replicationControl.getPartition(topicIdPartition.topicId(), topicIdPartition.partitionId());
+1254          assertArrayEquals(new int[]{0, 3}, partition.elr, partition.toString());
+1255          assertArrayEquals(new int[]{2}, partition.isr, partition.toString());
+1256          assertEquals(2, partition.leader, partition.toString());
+1257          assertArrayEquals(new int[]{}, partition.lastKnownElr, partition.toString());
+1258      }</code></pre></details><p>Supporting versioned references: <a href="https://kafka.apache.org/41/design/protocol/">Kafka 4.1 protocol reference</a> (older than this source snapshot), and <a href="https://cwiki.apache.org/confluence/spaces/KAFKA/pages/255070434/KIP-932%2BQueues%2Bfor%2BKafka">KIP-932 share-group design</a>. Source wins where versioned documentation or proposals differ.</p><p><a href="kafka-recovery-validation.json">Artifact validation and source manifest</a></p></section><footer><a href="index.html">Field guide home</a><a href="kafka-rpc-atlas.html">Complete Kafka RPC schema atlas</a></footer></main></div></body></html>

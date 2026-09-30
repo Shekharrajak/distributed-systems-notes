@@ -1,0 +1,1136 @@
+{
+  "sourceRevision": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81",
+  "sourceInspectionOnly": true,
+  "kafkaTestsRun": false,
+  "liveFaultInjectionRun": false,
+  "pages": [
+    "kafka-leadership-metadata.html",
+    "kafka-group-share-coordinators.html",
+    "kafka-transaction-marker-recovery.html"
+  ],
+  "diagrams": [
+    "recovery-roles",
+    "recovery-election",
+    "recovery-metadata",
+    "recovery-broker-failure",
+    "recovery-group-recovery",
+    "recovery-share-planes",
+    "recovery-share-ack",
+    "recovery-share-failure",
+    "recovery-txn-logs",
+    "recovery-txn-markers",
+    "recovery-txn-crash",
+    "recovery-mental"
+  ],
+  "evidence": [
+    {
+      "id": "raft-vote",
+      "file": "raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java",
+      "needle": "private VoteResponseData handleVoteRequest",
+      "claim": "Vote validates epochs, candidate log position and voter identity; pre-vote is a distinct mode.",
+      "line": 832,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L832"
+    },
+    {
+      "id": "raft-election",
+      "file": "raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java",
+      "needle": "private boolean maybeTransitionToLeader",
+      "claim": "A granted majority election advances a candidate to leader; a prospective candidate first advances through pre-vote.",
+      "line": 682,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L682"
+    },
+    {
+      "id": "raft-state",
+      "file": "raft/src/main/java/org/apache/kafka/raft/QuorumState.java",
+      "needle": "transitionToCandidate()",
+      "claim": "Election epochs and voted state belong to the quorum state machine, not consumer-group membership.",
+      "line": 638,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/QuorumState.java#L638"
+    },
+    {
+      "id": "raft-files",
+      "file": "core/src/main/scala/kafka/raft/KafkaRaftManager.scala",
+      "needle": "new FileQuorumStateStore",
+      "claim": "Metadata log, persistent election state, Raft client and driver are wired together.",
+      "line": 138,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/raft/KafkaRaftManager.scala#L138"
+    },
+    {
+      "id": "raft-majority",
+      "file": "raft/src/main/java/org/apache/kafka/raft/LeaderState.java",
+      "needle": "maybeUpdateHighWatermark",
+      "claim": "The metadata high watermark derives from voter replication positions.",
+      "line": 660,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/main/java/org/apache/kafka/raft/LeaderState.java#L660"
+    },
+    {
+      "id": "controller-commit",
+      "file": "metadata/src/main/java/org/apache/kafka/controller/QuorumController.java",
+      "needle": "public void handleCommit",
+      "claim": "Committed metadata advances controller completion; standby controllers replay records.",
+      "line": 978,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java#L978"
+    },
+    {
+      "id": "controller-leader",
+      "file": "metadata/src/main/java/org/apache/kafka/controller/QuorumController.java",
+      "needle": "public void handleLeaderChange",
+      "claim": "Raft leader changes claim or renounce controller authority; speculative state is not committed truth.",
+      "line": 1107,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/QuorumController.java#L1107"
+    },
+    {
+      "id": "metadata-loader",
+      "file": "metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java",
+      "needle": "public void handleCommit",
+      "claim": "Committed metadata batches become deltas/images delivered to publishers.",
+      "line": 396,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java#L396"
+    },
+    {
+      "id": "metadata-snapshot",
+      "file": "metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java",
+      "needle": "public void handleLoadSnapshot",
+      "claim": "Snapshot load reconstructs metadata independently of user-topic record data.",
+      "line": 417,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/image/loader/MetadataLoader.java#L417"
+    },
+    {
+      "id": "broker-publisher",
+      "file": "core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala",
+      "needle": "override def onMetadataUpdate",
+      "claim": "A broker updates its metadata cache, replica roles, and each internal-topic coordinator from metadata deltas.",
+      "line": 112,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala#L112"
+    },
+    {
+      "id": "broker-fence",
+      "file": "metadata/src/main/java/org/apache/kafka/controller/ReplicationControlManager.java",
+      "needle": "ControllerResult<Boolean> maybeFenceOneStaleBroker()",
+      "claim": "Expired broker sessions generate committed fencing and leadership changes.",
+      "line": 1738,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/ReplicationControlManager.java#L1738"
+    },
+    {
+      "id": "partition-election",
+      "file": "metadata/src/main/java/org/apache/kafka/controller/PartitionChangeBuilder.java",
+      "needle": "private boolean isValidNewLeader",
+      "claim": "Clean eligibility includes ISR, or tracked ELR when ISR is empty; not arbitrary out-of-sync replicas.",
+      "line": 318,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/main/java/org/apache/kafka/controller/PartitionChangeBuilder.java#L318"
+    },
+    {
+      "id": "broker-delta",
+      "file": "core/src/main/scala/kafka/server/ReplicaManager.scala",
+      "needle": "def applyDelta",
+      "claim": "ReplicaManager applies metadata changes to local partition leadership and replication.",
+      "line": 2360,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/ReplicaManager.scala#L2360"
+    },
+    {
+      "id": "controller-forward",
+      "file": "server/src/main/java/org/apache/kafka/server/ForwardingManagerImpl.java",
+      "needle": "public void forwardRequest",
+      "claim": "Broker forwarding wraps appropriate administrative requests for the active controller.",
+      "line": 60,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/ForwardingManagerImpl.java#L60"
+    },
+    {
+      "id": "broker-life",
+      "file": "server/src/main/java/org/apache/kafka/server/BrokerLifecycleManager.java",
+      "needle": "class BrokerLifecycleManager",
+      "claim": "Broker registration, heartbeats, fencing and shutdown are a separate lifecycle state machine.",
+      "line": 75,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/BrokerLifecycleManager.java#L75"
+    },
+    {
+      "id": "group-route",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java",
+      "needle": "public int partitionFor",
+      "claim": "Group ID hashes to __consumer_offsets; its leader owns the group shard.",
+      "line": 459,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L459"
+    },
+    {
+      "id": "group-load",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java",
+      "needle": "public void onElection",
+      "claim": "Internal-topic election schedules coordinator shard loading with the partition leader epoch.",
+      "line": 2847,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L2847"
+    },
+    {
+      "id": "group-members",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupMetadataManager.java",
+      "needle": "public void onLoaded()",
+      "claim": "Loaded classic, consumer, share and Streams groups reconstruct timers according to their protocol.",
+      "line": 6631,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupMetadataManager.java#L6631"
+    },
+    {
+      "id": "group-share",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java",
+      "needle": "public CompletableFuture<ShareGroupHeartbeatResponseData> shareGroupHeartbeat",
+      "claim": "Share-group membership heartbeat belongs to the group coordinator, not the share-state coordinator.",
+      "line": 1039,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java#L1039"
+    },
+    {
+      "id": "runtime-load",
+      "file": "coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java",
+      "needle": "private void load()",
+      "claim": "Shard replay is asynchronous; active state follows successful load.",
+      "line": 578,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L578"
+    },
+    {
+      "id": "runtime-hw",
+      "file": "coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java",
+      "needle": "class HighWatermarkListener",
+      "claim": "Replication high-watermark callbacks advance committed views and release deferred responses.",
+      "line": 1784,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L1784"
+    },
+    {
+      "id": "runtime-marker",
+      "file": "coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java",
+      "needle": "public CompletableFuture<Void> scheduleTransactionCompletion",
+      "claim": "Transaction marker completion is serialized through the coordinator runtime.",
+      "line": 2249,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java#L2249"
+    },
+    {
+      "id": "runtime-threads",
+      "file": "coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java",
+      "needle": "class MultiThreadedEventProcessor",
+      "claim": "A keyed event processor supports many shards; not one dedicated thread/pod per group.",
+      "line": 36,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/MultiThreadedEventProcessor.java#L36"
+    },
+    {
+      "id": "offset-marker",
+      "file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java",
+      "needle": "public void replayEndTransactionMarker",
+      "claim": "Commit materializes pending transactional offsets; abort discards them; no pending offsets makes replay a no-op.",
+      "line": 1251,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/OffsetMetadataManager.java#L1251"
+    },
+    {
+      "id": "share-route",
+      "file": "share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java",
+      "needle": "public int partitionFor",
+      "claim": "Share state is routed by the canonical group/topic-ID/partition key, not group ID alone.",
+      "line": 282,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java#L282"
+    },
+    {
+      "id": "share-storage",
+      "file": "share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java",
+      "needle": "public Map<String, String> shareGroupStateTopicConfigs",
+      "claim": "This checkout uses delete policy and coordinator-managed pruning for share state, not ordinary compact-only assumptions.",
+      "line": 291,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java#L291"
+    },
+    {
+      "id": "share-write",
+      "file": "share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java",
+      "needle": "public CoordinatorResult<WriteShareGroupStateResponseData, CoordinatorRecord> writeState",
+      "claim": "State writes produce ShareSnapshot/ShareUpdate records for a share-partition key.",
+      "line": 318,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L318"
+    },
+    {
+      "id": "share-read",
+      "file": "share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java",
+      "needle": "public CoordinatorResult<ReadShareGroupStateResponseData, CoordinatorRecord> readStateAndMaybeUpdateLeaderEpoch",
+      "claim": "Reading state from a newer source leader can persist its epoch to fence old writers.",
+      "line": 354,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L354"
+    },
+    {
+      "id": "share-epochs",
+      "file": "share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java",
+      "needle": "if (leaderEpochMap.containsKey(mapKey) && leaderEpochMap.get(mapKey) > partitionData.leaderEpoch())",
+      "claim": "Writes reject stale source-leader epochs and stale state epochs.",
+      "line": 774,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java#L774"
+    },
+    {
+      "id": "share-cache",
+      "file": "core/src/main/java/kafka/server/share/SharePartition.java",
+      "needle": "public ShareAcquiredRecords acquire(",
+      "claim": "Source-leader delivery cache acquires records and schedules lock timers; acquisition is not an offset commit.",
+      "line": 755,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L755"
+    },
+    {
+      "id": "share-init",
+      "file": "core/src/main/java/kafka/server/share/SharePartition.java",
+      "needle": "persister.readState(",
+      "claim": "A replacement source leader reloads share state via the persister.",
+      "line": 448,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L448"
+    },
+    {
+      "id": "share-ack",
+      "file": "core/src/main/java/kafka/server/share/SharePartition.java",
+      "needle": "void rollbackOrProcessStateUpdates(",
+      "claim": "Acknowledgement transitions wait on state persistence; errors roll back provisional local changes.",
+      "line": 2528,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L2528"
+    },
+    {
+      "id": "share-persist",
+      "file": "core/src/main/java/kafka/server/share/SharePartition.java",
+      "needle": "CompletableFuture<Void> writeShareGroupState(",
+      "claim": "WriteShareGroupState carries state epoch, start offset, source leader epoch and state batches.",
+      "line": 2858,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/java/kafka/server/share/SharePartition.java#L2858"
+    },
+    {
+      "id": "share-states",
+      "file": "server/src/main/java/org/apache/kafka/server/share/fetch/RecordState.java",
+      "needle": "enum RecordState",
+      "claim": "Delivery states include branch-specific ARCHIVING for the DLQ flow; this baseline has no TX_PENDING.",
+      "line": 26,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/server/src/main/java/org/apache/kafka/server/share/fetch/RecordState.java#L26"
+    },
+    {
+      "id": "txn-route",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala",
+      "needle": "def partitionFor",
+      "claim": "Transactional ID hashes to a __transaction_state partition.",
+      "line": 439,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L439"
+    },
+    {
+      "id": "txn-end",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala",
+      "needle": "private def endTransactionWithTV1",
+      "claim": "EndTxn validates identity/state then persists a prepare decision before replying and dispatching markers.",
+      "line": 544,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala#L544"
+    },
+    {
+      "id": "txn-end-v2",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala",
+      "needle": "private def endTransaction(transactionalId",
+      "claim": "The common EndTxn path delegates legacy handling and applies TV2 epoch/retry rules.",
+      "line": 759,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala#L759"
+    },
+    {
+      "id": "txn-timeout",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala",
+      "needle": "def timedOutTransactions()",
+      "claim": "Timeout selection is for eligible ONGOING transactions, not prepared decisions.",
+      "line": 128,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L128"
+    },
+    {
+      "id": "replica-truncate",
+      "file": "core/src/main/scala/kafka/server/AbstractFetcherThread.scala",
+      "needle": "private def truncateToEpochEndOffsets",
+      "claim": "Returning followers reconcile log history using epoch end offsets; divergence is not silently retained.",
+      "line": 209,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/AbstractFetcherThread.scala#L209"
+    },
+    {
+      "id": "marker-schema",
+      "file": "clients/src/main/resources/common/message/WriteTxnMarkersRequest.json",
+      "needle": "\"apiKey\": 27",
+      "claim": "Exact marker request fields and TransactionVersion gate are source-generated protocol definitions.",
+      "line": 17,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/WriteTxnMarkersRequest.json#L17"
+    },
+    {
+      "id": "find-schema",
+      "file": "clients/src/main/resources/common/message/FindCoordinatorRequest.json",
+      "needle": "\"apiKey\": 10",
+      "claim": "Coordinator key types and canonical share-key format are versioned wire contract.",
+      "line": 17,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/resources/common/message/FindCoordinatorRequest.json#L17"
+    },
+    {
+      "id": "txn-reload",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala",
+      "needle": "def loadTransactionsForTxnTopicPartition",
+      "claim": "Recovered PREPARE_COMMIT/PREPARE_ABORT states regenerate marker work.",
+      "line": 538,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L538"
+    },
+    {
+      "id": "txn-append",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala",
+      "needle": "def appendTransactionToLog",
+      "claim": "Transaction metadata is replicated through the ordinary log append path, with ownership checks.",
+      "line": 648,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala#L648"
+    },
+    {
+      "id": "txn-markers",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala",
+      "needle": "def addTxnMarkersToSend",
+      "claim": "Marker work is grouped by current participant leaders; completion follows removal of pending participants.",
+      "line": 270,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala#L270"
+    },
+    {
+      "id": "txn-retry",
+      "file": "core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandler.scala",
+      "needle": "override def onComplete",
+      "claim": "Disconnect/retriable partition errors requeue markers; stale coordinator work is cancelled.",
+      "line": 37,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandler.scala#L37"
+    },
+    {
+      "id": "marker-handler",
+      "file": "core/src/main/scala/kafka/server/KafkaApis.scala",
+      "needle": "def handleWriteTxnMarkersRequest",
+      "claim": "Participant brokers append control batches; __consumer_offsets markers use the group coordinator completion path.",
+      "line": 1748,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L1748"
+    },
+    {
+      "id": "marker-fence",
+      "file": "storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java",
+      "needle": "private void checkCoordinatorEpoch",
+      "claim": "Participant producer state rejects marker coordinator epochs older than the highest observed epoch.",
+      "line": 246,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java#L246"
+    },
+    {
+      "id": "marker-append",
+      "file": "storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java",
+      "needle": "public Optional<CompletedTxn> appendEndTxnMarker",
+      "claim": "Producer epoch checks differ by transaction version; marker data updates producer/transaction state.",
+      "line": 259,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java#L259"
+    },
+    {
+      "id": "unstable",
+      "file": "storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerStateManager.java",
+      "needle": "public Optional<LogOffsetMetadata> firstUnstableOffset()",
+      "claim": "Undecided transactions and markers not yet below the high watermark both hold back stable visibility.",
+      "line": 246,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerStateManager.java#L246"
+    },
+    {
+      "id": "lso",
+      "file": "storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java",
+      "needle": "public long lastStableOffset()",
+      "claim": "The exclusive stable boundary is min(high watermark, earliest unstable transaction offset).",
+      "line": 678,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java#L678"
+    },
+    {
+      "id": "test-election",
+      "file": "raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java",
+      "needle": "public void testInitializeAsCandidateAndBecomeLeaderQuorumOfThree",
+      "claim": "Inspected test: self vote plus one peer elects a leader in a three-voter quorum.",
+      "line": 975,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java#L975"
+    },
+    {
+      "id": "test-quorum-loss",
+      "file": "raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java",
+      "needle": "public void testLeaderShouldResignLeadershipIfNotGetFetchRequestFromMajorityVoters",
+      "claim": "Test covers leader resignation after losing majority contact.",
+      "line": 685,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/raft/src/test/java/org/apache/kafka/raft/KafkaRaftClientTest.java#L685"
+    },
+    {
+      "id": "test-elr",
+      "file": "metadata/src/test/java/org/apache/kafka/controller/ReplicationControlManagerTest.java",
+      "needle": "public void testEligibleLeaderReplicas_CleanElection",
+      "claim": "Inspected test: a tracked ELR can recover leadership when ISR is empty.",
+      "line": 1231,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/metadata/src/test/java/org/apache/kafka/controller/ReplicationControlManagerTest.java#L1231"
+    },
+    {
+      "id": "test-runtime",
+      "file": "coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java",
+      "needle": "public void testScheduleLoadingWithFailure",
+      "claim": "Test covers failed shard loading, rather than treating elected ownership as immediately ready.",
+      "line": 182,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java#L182"
+    },
+    {
+      "id": "test-marker-timeout",
+      "file": "coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java",
+      "needle": "public void testScheduleTransactionCompletionWhenWriteTimesOut",
+      "claim": "Test exercises timeout during group-coordinator marker completion.",
+      "line": 1418,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/coordinator-common/src/test/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntimeTest.java#L1418"
+    },
+    {
+      "id": "test-txn-reload",
+      "file": "core/src/test/scala/unit/kafka/coordinator/transaction/TransactionStateManagerTest.scala",
+      "needle": "def testLoadAndRemoveTransactionsForPartition",
+      "claim": "Inspected test rebuilds transaction state from multiple log records and removes it on resignation.",
+      "line": 285,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionStateManagerTest.scala#L285"
+    },
+    {
+      "id": "test-marker-retry",
+      "file": "core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala",
+      "needle": "def shouldReEnqueuePartitionsWhenBrokerDisconnected",
+      "claim": "Inspected test verifies marker requeue on disconnected broker.",
+      "line": 66,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala#L66"
+    },
+    {
+      "id": "test-marker-stale",
+      "file": "core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala",
+      "needle": "def shouldCompleteDelayedOperationWhenCoordinatorEpochChanged",
+      "claim": "Inspected test cancels stale work after coordinator epoch changes.",
+      "line": 111,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandlerTest.scala#L111"
+    },
+    {
+      "id": "test-share-fence",
+      "file": "share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java",
+      "needle": "public void testWriteStateFencedLeaderEpochError",
+      "claim": "Inspected test rejects stale source-leader writes without generating state records.",
+      "line": 546,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java#L546"
+    },
+    {
+      "id": "test-share-state",
+      "file": "share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java",
+      "needle": "public void testWriteStateFencedStateEpochError",
+      "claim": "Inspected test rejects a stale share state epoch.",
+      "line": 578,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java#L578"
+    },
+    {
+      "id": "test-share-rollback",
+      "file": "core/src/test/java/kafka/server/share/SharePartitionTest.java",
+      "needle": "public void testAcknowledgeRollbackWithFullBatchError",
+      "claim": "Inspected test rolls back a failed acknowledgement batch to acquired state.",
+      "line": 3310,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/java/kafka/server/share/SharePartitionTest.java#L3310"
+    },
+    {
+      "id": "test-stable",
+      "file": "storage/src/test/java/org/apache/kafka/storage/internals/log/ProducerStateManagerTest.java",
+      "needle": "public void testLastStableOffsetCompletedTxn",
+      "claim": "Test covers stable-offset calculation across interleaved transactions.",
+      "line": 1244,
+      "url": "https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/test/java/org/apache/kafka/storage/internals/log/ProducerStateManagerTest.java#L1244"
+    }
+  ],
+  "scopeChecks": {
+    "transactionalShareApiAbsent": true,
+    "txPendingAbsent": true
+  },
+  "rendered": [
+    {
+      "id": "recovery-roles",
+      "width": 1185.375,
+      "height": 730.8858032226562,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-election",
+      "width": 750,
+      "height": 1001,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-metadata",
+      "width": 1025,
+      "height": 961,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-broker-failure",
+      "width": 1025,
+      "height": 1057,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-group-recovery",
+      "width": 962.30078125,
+      "height": 1144.1817626953125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-share-planes",
+      "width": 902.40234375,
+      "height": 907.8876953125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-share-ack",
+      "width": 1045,
+      "height": 1169,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-share-failure",
+      "width": 919.0390625,
+      "height": 628.453125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-txn-logs",
+      "width": 1057.09375,
+      "height": 653.8529052734375,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-txn-markers",
+      "width": 1037,
+      "height": 1081,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-txn-crash",
+      "width": 1230.0625,
+      "height": 911,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "recovery-mental",
+      "width": 1449.671875,
+      "height": 212,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    }
+  ],
+  "diagramGeometryPassed": true,
+  "artifactChecks": {
+    "pages": [
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      }
+    ],
+    "errors": [],
+    "interactions": [
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      }
+    ]
+  },
+  "artifactChecksPassed": true,
+  "documentationTests": {
+    "passed": 17,
+    "failed": 0,
+    "command": "node --test scripts/build-site.test.mjs scripts/build-kafka-guide.test.mjs scripts/build-kafka-recovery.test.mjs"
+  },
+  "staticSite": {
+    "files": 217,
+    "htmlPages": 47,
+    "diagrams": 78,
+    "checkedLinks": 1620,
+    "broken": []
+  },
+  "visualInspection": {
+    "completed": true,
+    "diagrams": [
+      "recovery-roles",
+      "recovery-election",
+      "recovery-metadata",
+      "recovery-broker-failure",
+      "recovery-group-recovery",
+      "recovery-share-planes",
+      "recovery-share-ack",
+      "recovery-share-failure",
+      "recovery-txn-logs",
+      "recovery-txn-markers",
+      "recovery-txn-crash",
+      "recovery-mental"
+    ],
+    "desktopAndMobilePages": [
+      "kafka-leadership-metadata.html",
+      "kafka-group-share-coordinators.html",
+      "kafka-transaction-marker-recovery.html"
+    ]
+  }
+}

@@ -2229,3 +2229,747 @@ classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
 classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12
 linkStyle default stroke:#64748b,stroke-width:1.7px,stroke-linecap:round
 ```
+
+<!-- kafka-recovery-diagrams -->
+
+# Kafka leadership and coordinator recovery
+
+## One cluster, several independent owners
+
+Illustrative placement: these are roles inside processes, not one required pod per box. The controller assigns partition leaders; backing-partition leadership determines coordinator ownership.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph C["Controller quorum"]
+ C1["Active controller"]
+ CM[("Replicated metadata log")]
+ C1 --> CM
+end
+subgraph B["Broker processes — roles can coexist"]
+ P["User partition leader"]
+ G["Group coordinator shard"]
+ T["Transaction coordinator shard"]
+ S["Share coordinator shard"]
+end
+subgraph D["Replicated broker logs"]
+ PD[("orders / P0")]
+ GD[("__consumer_offsets")]
+ TD[("__transaction_state")]
+ SD[("__share_group_state")]
+end
+CM -. metadata .-> P
+CM -. metadata .-> G
+CM -. metadata .-> T
+CM -. metadata .-> S
+P --> PD
+G --> GD
+T --> TD
+S --> SD
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class C1 control
+class CM,PD,GD,TD,SD store
+class P worker
+class G,S group
+class T txn
+```
+
+## KRaft election: votes choose the controller
+
+Three controller voters; C1 fails. The inspected code has a prospective/pre-vote phase before a new election epoch. Exact wire support depends on the negotiated KRaft version.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(224,242,254) Controller quorum
+ participant C1 as C1 / old leader
+ participant C2 as C2 / voter
+ participant C3 as C3 / voter
+end
+ Note over C1: Fails or becomes unreachable
+ C2->>C2: Fetch/election timeout
+ C2->>C3: Vote(preVote), log epoch + offset
+ C3-->>C2: Grant if eligible and log up-to-date
+ C2->>C2: Persist new epoch and own vote
+ C2->>C3: Vote(candidate epoch)
+ C3-->>C2: Vote granted
+ C2->>C2: Majority reached, become leader
+ C2->>C3: BeginQuorumEpoch
+ C3->>C2: Fetch metadata log
+ C2-->>C3: New-epoch record + metadata
+ C3->>C2: Fetch at advanced offset
+ C2->>C2: Advance committed metadata boundary
+```
+
+## Metadata travels as a replicated log, then an image
+
+This is KRaft metadata propagation, not a legacy controller sending LeaderAndIsr for every change. Fetch arrows indicate pull replication; replies carry the records.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(241,245,249) Requester
+ participant A as Broker control / forwarding
+end
+box rgb(224,242,254) Control plane
+ participant C as Active controller
+ participant V as Controller voter
+end
+box rgb(220,252,231) Data plane
+ participant B as Broker / observer
+end
+ A->>C: Forward admin RPC or send broker control RPC
+ C->>C: Ordered event produces metadata records
+ V->>C: Fetch metadata
+ C-->>V: Records
+ V->>C: Report advanced fetch position
+ C->>C: Quorum commit, complete pending operation
+ C-->>A: Response under API completion rules
+ B->>C: Fetch metadata as non-voting observer
+ C-->>B: Records + committed boundary
+ B->>B: MetadataLoader builds delta/image
+ B->>B: Publisher updates replicas + coordinators
+```
+
+## A broker failure fans out into independent recoveries
+
+Example: B1 led a user partition and one group shard. Other transaction/share shards may live elsewhere and do not automatically move.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(224,242,254) Control plane
+ participant C as Active controller
+end
+box rgb(220,252,231) Broker replicas
+ participant O as B1 / failed
+ participant N as B2 / eligible replica
+end
+box rgb(241,245,249) Client
+ participant U as Consumer / producer
+end
+ Note over O: Heartbeats stop
+ C->>C: Detect expired broker session
+ C->>C: Commit fence + partition changes via quorum
+ N->>C: Fetch committed metadata
+ C-->>N: New leader + partition epochs
+ N->>N: Apply replica-role change
+ N->>N: Load coordinator if internal partition moved
+ U->>N: Refresh metadata / FindCoordinator then retry
+ N-->>U: Loading error until shard ready
+ N->>N: Finish replay, activate shard
+ U->>N: Retry valid request
+ N-->>U: Serve from reconstructed state
+```
+
+## Group coordinator = a recoverable shard
+
+No separate election per group. The controller elects the backing partition leader; that broker loads all groups mapped to the shard.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph CONTROL["Committed cluster metadata"]
+ A["__consumer_offsets / P7
+leader changes B1 → B2"]
+end
+subgraph RUNTIME["B2 coordinator runtime"]
+ B["onElection(P7, leader epoch)"]
+ C["LOADING: replay log and markers"]
+ D{"Load succeeds?"}
+ E["ACTIVE: restore protocol timers"]
+ F["FAILED: reject service"]
+end
+subgraph CLIENT["Client recovery"]
+ G["FindCoordinator + retry/backoff"]
+ H["Resume heartbeat / offset operations"]
+end
+A --> B --> C --> D
+D -- yes --> E
+D -- no --> F
+G -- requests see loading --> C
+E -. retry succeeds .-> H
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A control
+class B,C,D,E group
+class F group,danger
+class G,H store
+```
+
+## Share groups have three owners
+
+Membership, record delivery and durable delivery state are deliberately separate. B1, B2 and B3 can be the same process or different brokers.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph U["Application"]
+ C["Share consumer"]
+end
+subgraph G["B1 — group coordinator"]
+ M["Membership + assignment"]
+ O[("__consumer_offsets")]
+ M --> O
+end
+subgraph P["B2 — source partition leader"]
+ F["SharePartitionManager"]
+ L["SharePartition cache
+acquisition locks + timers"]
+ D[("orders / P0 records")]
+ F --> L
+ F --> D
+end
+subgraph S["B3 — share coordinator"]
+ X["ShareCoordinatorShard"]
+ SS[("__share_group_state")]
+ X --> SS
+end
+C -- ShareGroupHeartbeat --> M
+C -- ShareFetch / ShareAcknowledge --> F
+L -- Read / WriteShareGroupState --> X
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class C store
+class M group
+class O,D,SS store
+class F,L worker
+class X group
+```
+
+## An acknowledgement crosses a durability boundary
+
+Ordinary ACCEPT shown. A successful local application side effect is not atomically coupled to this acknowledgement. Share state persistence uses broker replication, not controller-quorum replication.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(241,245,249) Application
+ participant U as Share consumer
+end
+box rgb(220,252,231) Source leader
+ participant L as SharePartition
+end
+box rgb(254,249,195) State shard
+ participant S as Share coordinator
+ participant R as State-topic replica
+end
+ U->>L: ShareFetch
+ L->>L: Acquire records + lock timer
+ L-->>U: Records and acquired ranges
+ U->>U: Process record / external side effect
+ U->>L: ShareAcknowledge(ACCEPT)
+ L->>L: Validate ownership, provisional transition
+ L->>S: WriteShareGroupState(epochs, batches)
+ S->>S: Append state record
+ R->>S: Replica Fetch
+ S-->>R: State records
+ R->>S: Fetch at advanced offset
+ S->>S: Advance high watermark
+ S-->>L: Success after durable write boundary
+ L->>L: Finalize local transition
+ L-->>U: Acknowledgement result
+```
+
+## Recover the state owner that actually failed
+
+Do not conflate a crashed consumer, a source-partition leader and the share-state coordinator.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph FAILURE["Which component failed?"]
+ F{"Failure domain"}
+ C["Consumer process"]
+ P["Source partition leader"]
+ S["Share state coordinator"]
+end
+subgraph RECOVERY["Independent recovery paths"]
+ CR["Release or acquisition-lock expiry
+redelivery remains possible"]
+ PR["Elect source leader
+reload state via persister
+use newer leader epoch"]
+ SR["Elect state-topic leader
+replay share shard
+retry state RPCs"]
+end
+F --> C --> CR
+F --> P --> PR
+F --> S --> SR
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class F,C,P,S store
+class CR,PR worker
+class SR group
+```
+
+## A transaction leaves evidence in different logs
+
+A Kafka consume-transform-produce transaction can include __consumer_offsets. Ordinary Flink KafkaSource offset commits are not automatically part of this transaction.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph TC["Transaction coordinator"]
+ T["Transaction state machine"]
+ D[("__transaction_state
+prepare decision → complete")]
+ T --> D
+end
+subgraph P["Output partition leader"]
+ W["Validate and append marker"]
+ L[("Output log
+transactional data + control batch")]
+ W --> L
+end
+subgraph G["Group coordinator — only if enrolled"]
+ O["Complete transactional offsets"]
+ OL[("__consumer_offsets
+pending offsets + control batch")]
+ O --> OL
+end
+T -- WriteTxnMarkers --> W
+T -- WriteTxnMarkers --> O
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class T txn
+class W worker
+class O group
+class D,L,OL store
+```
+
+## EndTxn decision, marker fan-out, completion
+
+Two participant leaders shown. Each marker must be replicated under its partition policy. Final COMPLETE bookkeeping is not the moment at which every reader simultaneously sees the transaction.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+sequenceDiagram
+box rgb(241,245,249) Producer process
+ participant P as Producer
+end
+box rgb(237,233,254) Transaction shard
+ participant T as Coordinator
+end
+box rgb(220,252,231) Participant leaders
+ participant A as Output P0 leader
+ participant B as Output P1 leader
+end
+ P->>T: EndTxn(COMMIT)
+ T->>T: Replicate PREPARE_COMMIT + participant set
+ T-->>P: EndTxn success
+ par Marker for P0
+ T->>A: WriteTxnMarkers(COMMIT, identities, epochs)
+ A->>A: Append + replicate control batch
+ A-->>T: Per-partition result
+ and Marker for P1
+ T->>B: WriteTxnMarkers(COMMIT, identities, epochs)
+ B->>B: Append + replicate control batch
+ B-->>T: Per-partition result
+ end
+ T->>T: Replicate COMPLETE_COMMIT after all finish
+ Note over A,B: Each partition advances LSO independently
+```
+
+## Crash recovery follows the durable state
+
+This is a decision tree over recovered log state, not every legal TransactionMetadata transition. A prepared decision is irrevocable; completion work is repeatable.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart TB
+subgraph LOAD["Replacement transaction coordinator"]
+ A["Replay __transaction_state shard"]
+ Q{"Recovered transaction state"}
+end
+subgraph WORK["Recovery action"]
+ O["ONGOING
+client may continue; timeout may abort"]
+ C["PREPARE_COMMIT
+resume COMMIT markers"]
+ B["PREPARE_ABORT
+resume ABORT markers"]
+ D["COMPLETE state
+no unfinished marker fan-out"]
+ E["All required markers complete
+append COMPLETE state"]
+end
+A --> Q
+Q --> O
+Q --> C
+Q --> B
+Q --> D
+C --> E
+B --> E
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,Q txn
+class O,C,B,D,E worker
+```
+
+## The presentation mental model: map, journal, receipt
+
+Use the same four questions for every failure: who owned it, which durable journal survives, what fences the old owner, and what proves completion?
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":44,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":65,"messageMargin":42,"wrap":true,"width":170}}}%%
+flowchart LR
+subgraph MAP["1 — Map"]
+ M["KRaft metadata
+who owns each partition?"]
+end
+subgraph JOURNAL["2 — Journal"]
+ J["User and internal logs
+what happened durably?"]
+end
+subgraph FENCE["3 — Fence"]
+ F["Epochs + validation
+which owner is stale?"]
+end
+subgraph RECEIPT["4 — Receipt"]
+ R["HW / marker / LSO / checkpoint
+what is actually complete?"]
+end
+M --> J --> F --> R
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef group fill:#fef9c3,stroke:#ca8a04,color:#713f12
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef txn fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class M control
+class J store
+class F group
+class R worker
+```
+
+<!-- kafka-offset-diagrams -->
+
+# Offset commits: Kafka, Flink and Spark
+
+## Three progress authorities, not three spellings of commit
+
+Solid arrows store recovery progress. The dashed Flink path publishes optional Kafka group offsets. Sink output durability is a separate concern in every row.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph APP["Processing runtimes"]
+ K["Plain Kafka consumer"]
+ F["Flink KafkaSource"]
+ S["Spark Structured Streaming"]
+end
+subgraph STORE["Durable progress stores"]
+ O[("Kafka __consumer_offsets")]
+ C[("Flink completed checkpoint")]
+ L[("Spark checkpoint logs and state")]
+end
+K -->|"commitSync or commitAsync"| O
+F -->|"snapshot split offsets"| C
+F -. "after checkpoint completion" .-> O
+S -->|"offsets / commits / state"| L
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class K,F,S runtime
+class O,C,L store
+```
+
+## Commit the safe frontier, not the furthest finished record
+
+Illustrative contiguous input offsets. 102 is unfinished, so the safe restart offset is 102 even though 103 and 104 finished. Real Kafka offsets can have gaps.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph P["One input partition — fetched offsets 100 through 104"]
+ A["100 done"] --> B["101 done"] --> C["102 pending"] --> D["103 done"] --> E["104 done"]
+end
+subgraph DEC["Application completion tracker"]
+ F["Safe next offset = 102"]
+ U["Unsafe next offset = 105"]
+end
+B --> F
+E -. "ignores unfinished work" .-> U
+subgraph REC["After a crash"]
+ R["Resume at 102
+Later completed effects may repeat"]
+ X["Resume at 105
+Record 102 is skipped"]
+end
+F --> R
+U --> X
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,D,E io
+class C,U,X danger
+class F,R control
+```
+
+## Same server acknowledgement, different caller waiting
+
+Two alternatives on one consumer owner thread. Async submission may reach the network before or after method return; this shows one possible schedule. Return is not a broker acknowledgement.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(237,233,254) Application process
+ participant A as Consumer owner thread
+ participant C as Kafka client internals
+end
+box rgb(241,245,249) Kafka broker
+ participant G as Group coordinator
+end
+ A->>C: commitSync(safe offsets, timeout)
+ C->>G: OffsetCommit API 8
+ G->>G: Validate and replicate offsets
+ G-->>C: Per-partition result
+ C-->>A: Return success or throw
+ Note over A: Caller waited for result
+ A->>C: commitAsync(safe offsets, callback)
+ C-->>A: Return without broker acknowledgement
+ C->>G: OffsetCommit API 8
+ G->>G: Same validation and replication
+ G-->>C: Per-partition result
+ C->>C: Queue callback completion
+ A->>C: Later poll / commit / close
+ C-->>A: Invoke callback on owner thread
+```
+
+## The word async appears at two different layers
+
+Both delegate implementations expose both APIs. Classic does not acquire a dedicated commit thread just because commitAsync is used. In the consumer-protocol delegate, network I/O is separated from user callback execution.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph OLD["Classic / consumer thread"]
+ A["commitSync / commitAsync"] --> B["ConsumerCoordinator"] --> C["ConsumerNetworkClient polling"]
+ C --> D["Drain completed callbacks"]
+end
+subgraph APP["New consumer / app thread"]
+ E["AsyncKafkaConsumer
+commitSync / commitAsync"]
+ F["OffsetCommitCallbackInvoker"]
+end
+subgraph BG["New consumer / network thread"]
+ G["ApplicationEventProcessor"] --> H["CommitRequestManager"] --> I["NetworkClientDelegate"]
+end
+E -. "application event queue" .-> G
+I -. "completion queue" .-> F
+subgraph SERVER["Remote coordinator broker"]
+ J["OffsetCommit handler"]
+end
+C --> J
+I --> J
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,D,E,F runtime
+class C,G,H,I io
+class J control
+style OLD fill:#f5f3ff,stroke:#c4b5fd
+style APP fill:#f5f3ff,stroke:#c4b5fd
+style BG fill:#fff7ed,stroke:#fdba74
+style SERVER fill:#f0f9ff,stroke:#7dd3fc
+```
+
+## The commit goes to the coordinator, not every input leader
+
+Illustrative RF=3 offsets partition. Follower Fetch replication advances the high watermark. Broker role placement is independent of which broker leads the input data partition.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(255,237,213) Client process
+ participant C as Consumer
+end
+box rgb(224,242,254) Kafka brokers
+ participant B as Bootstrap broker
+ participant G as Offsets leader / coordinator
+ participant R as Offsets followers
+end
+ C->>B: FindCoordinator(group.id)
+ B-->>C: Coordinator host and port
+ C->>G: OffsetCommit(group, epoch, offsets)
+ G->>G: Validate membership / ACL / partitions
+ G->>G: Append __consumer_offsets records
+ R->>G: Fetch offsets log
+ G-->>R: New record batches
+ R->>G: Fetch with advanced position
+ G->>G: Advance high watermark
+ G-->>C: OffsetCommitResponse errors per partition
+ Note over G,R: On leader loss, new owner replays committed log
+ C->>B: Rediscover after coordinator error
+```
+
+## Why retrying an old callback payload is unsafe
+
+This is a new application retry after a newer request—not Kafka reordering the original calls. Assume unchanged valid ownership; both writes are accepted.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(237,233,254) Consumer application
+ participant A as Owner thread
+end
+box rgb(224,242,254) Kafka coordinator
+ participant G as Offset log
+end
+ A->>G: Async request A = next offset 120
+ G-->>A: A fails or outcome is uncertain
+ A->>G: Async request B = next offset 180
+ G-->>A: B succeeds
+ Note over G: Stored offset = 180
+ A->>G: Delayed application retry of A = 120
+ G-->>A: Retry succeeds
+ Note over G: Stored offset = 120
+ Note over A,G: Crash now can replay already-processed records
+ Note over A: Publish current safe frontier instead of stale payload
+```
+
+## Flink checkpoint completion fans out to two different commits
+
+TaskManager source mailbox and fetcher are threads in a JVM, not separate pods. The sink committer may be in another task/JVM. This is a logical flow, not a total ordering between source-offset and sink-transaction completion.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(224,242,254) Flink control plane
+ participant J as JobManager
+end
+box rgb(237,233,254) TaskManager source
+ participant M as Source mailbox
+ participant F as Split fetcher
+end
+box rgb(220,252,231) Sink task
+ participant S as Kafka sink committer
+end
+box rgb(241,245,249) Durable systems
+ participant K as Kafka coordinators
+end
+ M->>M: Emit record 119, track next offset 120
+ J->>M: Trigger checkpoint 42
+ M->>M: snapshotState(42) = 120
+ M-->>J: Acknowledge persisted source snapshot
+ Note over J,S: Required snapshots and prepared sink recovery state are durable
+ J->>J: Persist completed checkpoint 42
+ par Publish source offsets
+ J-->>M: notifyCheckpointComplete(42)
+ M-)F: Enqueue saved offsets for checkpoint 42
+ F->>K: Consumer commitAsync(120)
+ K-->>F: Offset commit result
+ F->>F: Update source commit metrics
+ and Finalize transactional output
+ J-->>S: Checkpoint completion lifecycle
+ S->>K: Producer commitTransaction()
+ end
+ Note over M,K: Source OffsetCommit failure does not invalidate checkpoint 42
+```
+
+## Spark Structured Streaming: checkpoint logs drive restart
+
+Default synchronous microbatch path. Async progress tracking, continuous processing and RealTimeTrigger have different timing and are outside this sequence. There is no input OffsetCommit RPC in this flow.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(224,242,254) Spark driver
+ participant D as MicroBatchExecution
+end
+box rgb(241,245,249) Checkpoint storage
+ participant L as offsets / commits / state
+end
+box rgb(220,252,231) Executor JVMs
+ participant E as Kafka reader and tasks
+end
+box rgb(241,245,249) External systems
+ participant K as Kafka input leaders
+ participant S as Output sink
+end
+ D->>D: Choose batch 42 range [120, 180)
+ D->>L: Persist offsets/42 with end 180
+ D->>E: Schedule explicit offset ranges
+ E->>K: Assign / seek / Fetch from 120
+ K-->>E: Input records
+ E->>S: Write batch output
+ S-->>E: Output completion
+ E-->>D: Tasks and writer completion
+ D->>L: Persist commits/42
+ Note over D,L: Missing commits/42 means replay batch 42
+ D->>D: Kafka source.commit(end) is no-op
+```
+
+## Legacy DStreams: commitAsync first means enqueue
+
+Call on the original DirectKafkaInputDStream, after the output action succeeds. Queue coalescing uses max(untilOffset) only for submitted completed work; it cannot detect holes caused by out-of-order batch completion.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph DRIVER["Spark driver — output callback"]
+ A["Capture original RDD offset ranges"] --> B["Wait for output action success"] --> C["CanCommitOffsets.commitAsync"] --> Q["Thread-safe queue of OffsetRange"]
+end
+subgraph COMPUTE["Spark driver — later DStream compute"]
+ D["commitAll drains queue"] --> M["Max untilOffset per partition
+Most recent callback"] --> K["Driver KafkaConsumer.commitAsync"]
+end
+subgraph STORE["Remote Kafka coordinator"]
+ O[("__consumer_offsets")]
+end
+Q -. "deferred drain" .-> D
+K --> O
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C runtime
+class Q,D,M,K io
+class O store
+```
+<!-- /kafka-offset-diagrams -->

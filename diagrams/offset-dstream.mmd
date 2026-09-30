@@ -1,0 +1,23 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":72},"sequence":{"useMaxWidth":false,"actorMargin":75,"messageMargin":44,"wrap":true,"width":180}}}%%
+flowchart TB
+subgraph DRIVER["Spark driver — output callback"]
+ A["Capture original RDD offset ranges"] --> B["Wait for output action success"] --> C["CanCommitOffsets.commitAsync"] --> Q["Thread-safe queue of OffsetRange"]
+end
+subgraph COMPUTE["Spark driver — later DStream compute"]
+ D["commitAll drains queue"] --> M["Max untilOffset per partition
+Most recent callback"] --> K["Driver KafkaConsumer.commitAsync"]
+end
+subgraph STORE["Remote Kafka coordinator"]
+ O[("__consumer_offsets")]
+end
+Q -. "deferred drain" .-> D
+K --> O
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C runtime
+class Q,D,M,K io
+class O store
