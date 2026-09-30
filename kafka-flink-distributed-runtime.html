@@ -1,0 +1,984 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Kafka + Flink: pods, threads, RPCs and recovery · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="kafka-rpc-atlas.css"><script defer src="app.js"></script></head>
+<body data-page="kafka-flink-distributed-runtime.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Architecture · messages · code · failures</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Kafka, RPC, threads…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a></nav></aside><main id="main"><div class="hero"><p class="eyebrow">Source-backed deep dive · pinned repository revisions</p><h1>Kafka + Flink: pods, threads, RPCs and recovery</h1><p class="intro">Start at the cluster boundary, follow one record into the implementation, then practice the failure and presentation mental models.</p><nav class="toc" aria-label="On this page"><a href="#start">Start here: the answer in one minute</a><a href="#placement">1. From cluster to pod to task to operator</a><a href="#journey">2. Follow order-7 from produce to consume to output</a><a href="#broker">3. Zoom into Kafka: server, queues, threads and log files</a><a href="#source">4. KafkaSource: control plane and data plane are different</a><a href="#transform">5. Transform and sink: local calls, local channels or network</a><a href="#messages">6. Identify the protocol before explaining an arrow</a><a href="#checkpoint">7. Exactly-once is a recovery protocol, not a packet flag</a><a href="#storage">8. Put every piece of state in the correct store</a><a href="#failures">9. Failure cases: what fails, what survives, what gets retried</a><a href="#tradeoffs">10. Throughput, latency, durability and availability tradeoffs</a><a href="#sink-contract">11. What changes if the sink is not Kafka?</a><a href="#verify-placement">12. How to check the real deployment instead of guessing</a><a href="#evidence">13. Source trail, code excerpts and validation limits</a><a href="#mental-model">14. Presentation mental model: five questions and three planes</a></nav></div><section id="start"><h2>Start here: the answer in one minute</h2>
+      <p>A <strong>Kafka API</strong> is a versioned binary request/response contract. A <strong>Kafka role</strong> is the owner that handles it. A <strong>pod</strong> is a deployment/failure boundary. A <strong>thread</strong> is an execution boundary. These are four different things.</p>
+      <div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>Does every component get a pod?</td><td>No. Kafka group and transaction coordinators are broker components. KafkaSource and KafkaSink are connector libraries instantiated inside Flink TaskManager processes.</td></tr><tr><td>Are source, transform and sink in the same pod?</td><td>Sometimes. Chainable operators can run in one task/mailbox thread. Separate tasks may share a TaskManager JVM, or run on different TaskManagers/pods. Placement depends on the job graph and available slots.</td></tr><tr><td>Does every record make an RPC?</td><td>No. Kafka batches records into Produce/Fetch requests. Chained Flink operators use direct calls; inter-task data uses buffered channels. Checkpoint/deployment RPCs are a separate control path.</td></tr><tr><td>What survives a pod failure?</td><td>Replicated Kafka logs and durable Flink checkpoints, if configured and still available. An in-memory queue or producer buffer does not become durable because it lives in a pod.</td></tr><tr><td>What provides source-to-sink exactly-once?</td><td>A recoverable source position + consistent operator state + recoverable/idempotent sink commit. Reprocessing can happen; externally committed effects must not be duplicated.</td></tr></tbody></table></div>
+      <p>Reading route: placement → a record journey → broker threads → source/transform/sink threads → checkpoint/commit → failure cases → presentation mental model. Keep the <a href="kafka-rpc-atlas.html">complete Kafka RPC atlas</a> open as a lookup tab.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-roles">k-roles</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-broker">k-broker</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-source">f-source</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-chain">f-chain</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-reader">f-reader</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-commit">f-commit</a></div></section>
+<section id="placement"><h2>1. From cluster to pod to task to operator</h2>
+      <figure class="diagram" id="rpc-placement"><figcaption><h3>A deployment is not one pod per box</h3><p>Illustrative Kubernetes placement, not an observed cluster. Kafka brokers and Flink TaskManagers are separate processes; connector libraries live in TaskManagers. KRaft controllers are shown as a separate quorum; combined-role deployments also exist.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-placement.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-placement.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: A deployment is not one pod per box"><img src="diagrams/rpc-placement.svg" alt="A deployment is not one pod per box. Illustrative Kubernetes placement, not an observed cluster. Kafka brokers and Flink TaskManagers are separate processes; connector libraries live in TaskManagers. KRaft controllers are shown as a separate quorum; combined-role deployments also exist." loading="lazy"></div></figure>
+      <div class="table-scroll"><table><thead><tr><th>Layer</th><th>Lives where</th><th>What it owns</th></tr></thead><tbody><tr><td>Kafka broker</td><td>Usually one broker process per Kubernetes pod, or a process on a VM</td><td>Many topic-partition replicas, listeners, request handlers, caches and broker coordinator services. A broker can lead P0 and follow P1 at the same time.</td></tr><tr><td>KRaft controller</td><td>Dedicated controller processes, or combined broker/controller roles when configured</td><td>Cluster metadata decisions: registrations, topic/partition assignments, leadership and feature levels. A quorum replicates the metadata log; it is not the payload path for each application record.</td></tr><tr><td>Flink JobManager</td><td>A process/container; deployment mode determines job and cluster lifecycle</td><td>Dispatcher/ResourceManager and per-job JobMaster/scheduler. SourceCoordinator contains the connector enumerator. User source-enumerator code can run here; per-record transformations normally run in TaskManagers.</td></tr><tr><td>Flink TaskManager</td><td>Worker JVM, usually one per worker pod</td><td>TaskExecutor control endpoint, tasks/mailboxes, managed memory, network buffers, state backends and connector client threads.</td></tr><tr><td>Slot</td><td>Scheduling/resource allocation inside a TaskManager</td><td>Not a process, CPU core or thread. Slot sharing can place several tasks from the same job into one slot; it does not make those tasks one operator chain.</td></tr><tr><td>Task / subtask / chain</td><td>A deployed parallel instance in a TaskManager</td><td>A chain of synchronous operators typically executes in one StreamTask thread. A task can also have fetcher, producer, network and async-snapshot helper threads.</td></tr><tr><td>Container / pod / Kubernetes node</td><td>Infrastructure around the above</td><td>A pod can have sidecars and multiple containers; a node can host several pods. “Different pod” is not automatically “different failure domain.”</td></tr></tbody></table></div>
+      <p>Example, not a cluster observation: input topic has four partitions; KafkaSource parallelism is two; parse is chained with each source; keyed aggregate and sink each have parallelism two. Each source reader can own two partitions. Two TaskManagers with two slots each provide a possible placement, not a promise that each operator gets a dedicated slot or pod. Scheduler decisions, chaining, slot-sharing groups, resource profiles and anti-affinity determine the actual result.</p>
+      <p>The connector JAR must be available to the user-code classloader where its coordinator and reader/writer code run. Adding a Kafka connector does not launch Kafka Connect workers. Kafka Connect and Kafka Streams are different runtimes: Connect has connector/task worker processes and internal topics; Streams runs inside application instances and uses Kafka for repartition/changelog topics.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-roles">k-roles</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-broker">k-broker</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-enum">f-enum</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-source">f-source</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-chain">f-chain</a></div></section>
+<section id="journey"><h2>2. Follow order-7 from produce to consume to output</h2>
+      <p>Illustrative record: key <code>customer-7</code>, value <code>{orderId: 7, amount: 50}</code>, input partition P0, offset 104. Offsets are scoped to a topic partition, not globally unique record IDs. An output record receives its own offset; it does not inherit 104.</p>
+      <div class="table-scroll"><table><thead><tr><th>Step</th><th>Execution / message</th><th>Result</th></tr></thead><tbody><tr><td>1. Application send</td><td>KafkaProducer.send serializes key/value, selects a partition and appends to RecordAccumulator. Sender assembles batches and performs broker I/O.</td><td>send returning a Future is not a durable broker acknowledgement. Buffer pressure or metadata lookup can also block the calling thread.</td></tr><tr><td>2. Locate owners</td><td>Bootstrap → ApiVersions / Metadata; use advertised broker addresses for the partition leader.</td><td>bootstrap.servers is an entry list, not a proxy traversed for every request.</td></tr><tr><td>3. Append and replicate</td><td>Produce to P0 leader → authorization/validation → append → followers Fetch from leader.</td><td>With acks=all, completion waits for the required replicated position subject to ISR/min-ISR policy.</td></tr><tr><td>4. Source fetch</td><td>KafkaSource reader’s consumer Fetches input partitions at their assigned positions.</td><td>The response is record batches with offsets/metadata, not calls to the transform operator.</td></tr><tr><td>5. Emit and transform</td><td>Fetcher queue → mailbox → KafkaRecordEmitter → source output → map/keyed processing.</td><td>After successful deserialize/emit, split state advances to 105. A prefetched but un-emitted record is not yet part of this source state.</td></tr><tr><td>6. Write output</td><td>KafkaWriter serializes output → KafkaProducer accumulator → Sender → output partition leader.</td><td>In exactly-once mode the output belongs to an open transaction, not yet visible to read_committed readers.</td></tr><tr><td>7. Complete CP42</td><td>Flink persists source position 105, relevant operator state and sink recovery/committable state.</td><td>CP42 is the recovery boundary. Source-offset bookkeeping in Kafka is separate.</td></tr><tr><td>8. Publish transaction</td><td>Sink committer commits T42 → coordinator decision → markers → eligible LSO advance.</td><td>Downstream read_committed consumers can see the committed output. Their own processing/offset commit is another boundary.</td></tr></tbody></table></div>
+      <figure class="diagram" id="rpc-bootstrap"><figcaption><h3>Bootstrap finds owners; owners serve requests</h3><p>Simplified healthy path. Connections are reused; TLS/SASL and ApiVersions happen per connection as needed. The transaction coordinator and group coordinator can be different brokers from both partition leaders.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-bootstrap.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-bootstrap.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Bootstrap finds owners; owners serve requests"><img src="diagrams/rpc-bootstrap.svg" alt="Bootstrap finds owners; owners serve requests. Simplified healthy path. Connections are reused; TLS/SASL and ApiVersions happen per connection as needed. The transaction coordinator and group coordinator can be different brokers from both partition leaders." loading="lazy"></div></figure>
+      <p>DNS, TLS certificate names, SASL credentials, ACLs and network policies must work for <em>all advertised owners</em>, not only the bootstrap endpoint. Kafka’s ordinary protocol is binary over TCP (optionally TLS/SASL), not HTTP/gRPC. A schema registry, if used for payload serialization, is a separate service and protocol.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-producer">k-producer</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-produce">k-produce</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-fetch">k-fetch</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-emit">f-emit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-writer">f-writer</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-endtxn">k-endtxn</a></div></section>
+<section id="broker"><h2>3. Zoom into Kafka: server, queues, threads and log files</h2>
+      <figure class="diagram" id="rpc-broker-threads"><figcaption><h3>Inside one Kafka broker process</h3><p>These are threads, queues and components within a broker JVM—not separate pods. Replica fetchers in other brokers pull from this leader. Delayed operations release handler threads rather than blocking one thread per waiting request.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-broker-threads.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-broker-threads.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Inside one Kafka broker process"><img src="diagrams/rpc-broker-threads.svg" alt="Inside one Kafka broker process. These are threads, queues and components within a broker JVM—not separate pods. Replica fetchers in other brokers pull from this leader. Delayed operations release handler threads rather than blocking one thread per waiting request." loading="lazy"></div></figure>
+      <div class="table-scroll"><table><thead><tr><th>Component / module</th><th>Work and thread boundary</th><th>Why it matters</th></tr></thead><tbody><tr><td>clients: KafkaProducer / Sender / NetworkClient</td><td>Application-side buffering; Sender owns producer network progress and completes callbacks.</td><td>A producer is not a separate broker. Slow callbacks can stall producer network progress.</td></tr><tr><td>core: SocketServer.Acceptor / Processor</td><td>Acceptor distributes new connections; Processor uses a selector, reads complete frames, queues requests and writes responses.</td><td>One network thread multiplexes many connections; not one pod or dedicated thread per client.</td></tr><tr><td>server/core: RequestChannel / KafkaRequestHandler / KafkaApis</td><td>Handler pool dequeues and dispatches by API key. Requests may complete asynchronously through callbacks.</td><td>A request waiting for replication need not occupy a handler for the entire wait. Queues can still saturate.</td></tr><tr><td>core/storage: ReplicaManager / Partition / UnifiedLog / LogSegment</td><td>Validate leadership, epochs, record batches, producer sequence and ISR; append to partition logs.</td><td>A topic has multiple partition logs across brokers; storage placement is not the same thing as consumer group ownership.</td></tr><tr><td>Replica fetcher threads</td><td>Follower brokers request leader data with Fetch and append their own copies.</td><td>Replication is pull-based. Replication factor is not a count of application consumers.</td></tr><tr><td>Group coordinator / transaction coordinator</td><td>Ownership follows partitions of the respective internal topics. Components may coexist with data partition leaders on one broker.</td><td>FindCoordinator resolves an owner for a key; moving ownership requires loading durable state and fencing stale incarnations.</td></tr><tr><td>metadata / raft: QuorumController / KafkaRaftClient</td><td>Controller decisions are serialized and replicated through the KRaft metadata quorum.</td><td>Metadata quorum majority is a different rule from user-partition ISR acknowledgement.</td></tr></tbody></table></div>
+      <figure class="diagram" id="rpc-produce-replicate"><figcaption><h3>Produce durability is partition replication</h3><p>Example: replication factor 3, acks=all, min.insync.replicas=2. Both followers are initially in ISR. A real request batches many records/partitions; followers repeat Fetch calls and the leader learns their advanced offsets.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-produce-replicate.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-produce-replicate.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Produce durability is partition replication"><img src="diagrams/rpc-produce-replicate.svg" alt="Produce durability is partition replication. Example: replication factor 3, acks=all, min.insync.replicas=2. Both followers are initially in ISR. A real request batches many records/partitions; followers repeat Fetch calls and the leader learns their advanced offsets." loading="lazy"></div></figure>
+      <p>Partition storage includes append-only <code>.log</code> segments plus offset/time indexes, transaction indexes and producer/epoch recovery metadata. The OS page cache is part of the hot path. Appending, replicating, flushing and making a transaction visible are separate events. <code>acks=all</code> is not a promise that every replica has performed a physical disk fsync for that batch.</p>
+      <p>Example: RF=3 and min.insync.replicas=2. If all three replicas are in the relevant ISR, acks=all is not simply “wait for any two”; it follows the ISR/high-watermark completion rule. If one follower falls out and ISR remains sufficient, writes can continue. If ISR falls below the minimum, safe writes are rejected or fail—even if the leader process is alive. Current eligible-leader/ISR details are version- and feature-dependent.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-socket">k-socket</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-handler">k-handler</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-produce">k-produce</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-fetch">k-fetch</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-isr">k-isr</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-delayed">k-delayed</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-log">k-log</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-lso">k-lso</a> <a class="cite" href="kafka-flink-distributed-runtime.html#t-isr">t-isr</a></div></section>
+<section id="source"><h2>4. KafkaSource: control plane and data plane are different</h2>
+      <div class="table-scroll"><table><thead><tr><th>Path</th><th>Concrete components</th><th>Calls / state</th></tr></thead><tbody><tr><td>Coordinator path in JobManager</td><td>SourceCoordinator → KafkaSourceEnumerator → AdminClient</td><td>Discover topic partitions and resolve initial offsets via async work; serialize state changes/assignments on coordinator thread; deliver AddSplitEvent to readers.</td></tr><tr><td>Task control path</td><td>TaskExecutor operator-event gateway → StreamTask mailbox → SourceOperator</td><td>Deserialize assigned splits and call sourceReader.addSplits. Coordinator events are control messages, not Kafka record payloads.</td></tr><tr><td>Fetcher path in TaskManager</td><td>KafkaSourceFetcherManager → SplitFetcher → KafkaPartitionSplitReader</td><td>Own KafkaConsumer API calls, explicitly assign partitions, seek start offsets, poll and enqueue RecordsWithSplitIds.</td></tr><tr><td>Mailbox data path</td><td>SourceReaderBase.pollNext → KafkaRecordEmitter.emitRecord</td><td>Deserialize/emit records and mutate KafkaPartitionSplitState.currentOffset. This is the state later snapshotted.</td></tr><tr><td>Snapshot / restore</td><td>SourceOperator → KafkaSourceReader.snapshotState → KafkaPartitionSplit</td><td>Persist next offsets in Flink state. Restore/seek from checkpointed split offsets; initializer settings are not a replacement for existing restored state.</td></tr><tr><td>External group offsets</td><td>notifyCheckpointComplete → fetcher manager → consumer.commitAsync</td><td>Optional Kafka OffsetCommit after checkpoint completion. Failure affects monitoring/interoperability, not the source recovery position stored by Flink.</td></tr></tbody></table></div>
+      <figure class="diagram" id="rpc-source-threads"><figcaption><h3>One KafkaSource subtask crosses a thread boundary</h3><p>A SplitFetcher owns consumer API calls. A bounded handoff queue feeds the task mailbox, where deserialization/emission advances checkpointed split state. Consumer internal network threading depends on client configuration/version.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-source-threads.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-source-threads.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: One KafkaSource subtask crosses a thread boundary"><img src="diagrams/rpc-source-threads.svg" alt="One KafkaSource subtask crosses a thread boundary. A SplitFetcher owns consumer API calls. A bounded handoff queue feeds the task mailbox, where deserialization/emission advances checkpointed split state. Consumer internal network threading depends on client configuration/version." loading="lazy"></div></figure>
+      <details class="qa"><summary>Does group.id mean Kafka’s group coordinator assigns the Flink source partitions?</summary><p>No for this ordinary FLIP-27 KafkaSource. The enumerator assigns Flink splits and the reader calls <code>consumer.assign(...)</code>, not subscription-based group assignment. Do not draw JoinGroup/SyncGroup/Heartbeat as the source’s mandatory assignment loop. A group ID can still be used for initial committed-offset lookup and external offset commits.</p><p>Two independently deployed Flink jobs using the same group ID do not thereby become one coordinated split-assignment job. They can read the same partitions and overwrite the same external group offsets. Give jobs clear identities; let Flink own assignment within each job.</p></details>
+      <details class="qa"><summary>Does KafkaConsumer have its own network thread?</summary><p>The connector-level invariant is single-threaded consumer API ownership by the split fetcher. In the inspected Kafka client, ConsumerDelegateCreator chooses ClassicKafkaConsumer or AsyncKafkaConsumer according to group.protocol. Classic polling drives much of the network work on the calling path; the asynchronous consumer has a dedicated internal network thread. This implementation choice does not turn the connector into a separate pod or move operator state mutation out of the Flink mailbox.</p></details>
+      <p>Parallelism: with four partitions, at most four ordinary source readers can simultaneously own nonempty distinct partition splits; extra readers can be idle. A reader can multiplex many partitions. Partition discovery, rescaling and checkpoint restore change assignment. Reading more records into a client/queue can improve throughput but does not advance the durable recovery offset until they are emitted and checkpointed.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#f-enum">f-enum</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-source">f-source</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-assign">f-assign</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-poll">f-poll</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-base">f-base</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-emit">f-emit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-reader">f-reader</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-offsetcommit">f-offsetcommit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-fetchcommit">f-fetchcommit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-consumer">k-consumer</a> <a class="cite" href="kafka-flink-distributed-runtime.html#t-offset">t-offset</a> <a class="cite" href="kafka-flink-distributed-runtime.html#t-disabled">t-disabled</a></div></section>
+<section id="transform"><h2>5. Transform and sink: local calls, local channels or network</h2>
+      <figure class="diagram" id="rpc-locality"><figcaption><h3>Three very different meanings of “connected”</h3><p>A direct operator call needs neither Kafka nor Flink RPC. Separate tasks use a data exchange even when co-located. Different TaskManagers use Netty data transport, not a per-record JobMaster RPC.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-locality.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-locality.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Three very different meanings of “connected”"><img src="diagrams/rpc-locality.svg" alt="Three very different meanings of “connected”. A direct operator call needs neither Kafka nor Flink RPC. Separate tasks use a data exchange even when co-located. Different TaskManagers use Netty data transport, not a per-record JobMaster RPC." loading="lazy"></div></figure>
+      <pre class="guide-pre"><code>Illustrative DataStream topology, not a compiled deployment recipe:
+KafkaSource (parallelism 2)
+  -&gt; map(parse)                 [can chain with source]
+  -&gt; keyBy(customerId)          [hash partitioning; breaks direct chaining]
+  -&gt; keyed aggregate           [state belongs to its key groups]
+  -&gt; KafkaSink EXACTLY_ONCE     [writer + committing runtime topology]</code></pre>
+      <p>For a chain, ChainingOutput invokes the next operator’s record processor. StreamMap.processElement calls the user function. No Kafka serialization or network hop is needed between those operators; Flink may copy objects depending on reuse configuration. A blocking synchronous function stalls the shared mailbox and therefore its chained neighbors.</p>
+      <p>At an unchained edge, RecordWriter serializes Flink records into network buffers and result subpartitions. LocalInputChannel consumes a co-located task’s result without remote TCP. RemoteInputChannel requests subpartitions through a Netty connection to the peer TaskManager. Credit-based flow control prevents a fast sender from unlimited buffering at a slow receiver. Same pod does not necessarily mean same chain; same slot does not mean same thread.</p>
+      <p>KafkaSink is another client library. KafkaWriter.write runs on the owning task thread, serializes the value and calls producer.send. The producer Sender does socket I/O and invokes callbacks; the writer records async errors and surfaces them back to the mailbox/flush path. Each parallel writer can have producer resources, and exactly-once writers may have multiple in-flight transactional producers. “One sink” is not necessarily one TCP connection or one producer instance.</p>
+      <p>Sink V2 expands a committing sink into writer/committer runtime operators. They may be chained/co-located when the topology allows; they are not independent external services by definition. The committer runs in its task mailbox and commitTransaction can wait for Kafka’s producer network thread. Connector backchannels used to recycle producer resources are local implementation mechanisms, not durable recovery storage.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#f-chain">f-chain</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-map">f-map</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-local">f-local</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-remote">f-remote</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-writer">f-writer</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-prepare">f-prepare</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-committerop">f-committerop</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-commit">f-commit</a></div></section>
+<section id="messages"><h2>6. Identify the protocol before explaining an arrow</h2>
+      <div class="table-scroll"><table><thead><tr><th>Message boundary</th><th>Request / payload</th><th>Response / completion</th></tr></thead><tbody><tr><td>Kafka TCP wire</td><td>4-byte length + versioned RequestHeader + API body. Produce carries record batches; Fetch carries offsets/limits/isolation.</td><td>Length + ResponseHeader + matching versioned body; correlate by correlation ID. Errors can be per partition. acks=0 Produce has no normal response.</td></tr><tr><td>Flink submitTask RPC</td><td>TaskDeploymentDescriptor, JobMasterId, timeout → TaskExecutorGateway</td><td>CompletableFuture&lt;Acknowledge&gt;; successful submission is not proof that processing will never fail.</td></tr><tr><td>Flink operator event</td><td>ExecutionAttemptID, OperatorID, SerializedValue&lt;OperatorEvent&gt;; e.g. AddSplitEvent</td><td>Delivery/dispatch acknowledgement and mailbox execution. Splits are control state, not records.</td></tr><tr><td>Flink triggerCheckpoint RPC</td><td>ExecutionAttemptID, checkpointID, timestamp, CheckpointOptions</td><td>Acknowledge of trigger acceptance. This is not the durable task-state ACK.</td></tr><tr><td>Flink CheckpointBarrier</td><td>Checkpoint ID, timestamp and options through the same data-channel ordering domain</td><td>Downstream alignment/snapshot; not a separate Kafka topic and not a Kafka RPC.</td></tr><tr><td>Flink acknowledgeCheckpoint RPC</td><td>JobID, attempt ID, checkpoint ID, CheckpointMetrics, serialized TaskStateSnapshot (state handles)</td><td>Coordinator aggregates required ACKs; completed checkpoint is persisted before notifications. Bulk state bytes normally went to checkpoint storage.</td></tr><tr><td>Flink confirmCheckpoint RPC</td><td>Task attempt, completed checkpoint ID/timestamp, last subsumed checkpoint ID</td><td>Task schedules notifyCheckpointComplete callbacks. Sink commits and optional source offset commit are separate consequences.</td></tr><tr><td>Flink task data transport</td><td>Result partition/subpartition requests, serialized buffers/events and credits</td><td>Local channel or Netty protocol; not Pekko RPC per row.</td></tr><tr><td>Object storage / sink service</td><td>Backend-specific filesystem/HTTP calls for checkpoint objects or sink data</td><td>Storage-specific durability/commit semantics. HTTP 200 on one data object is not necessarily a committed table snapshot.</td></tr></tbody></table></div>
+      <p>Flink control gateways here are typed Java RPC interfaces backed by the runtime’s Pekko RPC service. They are not Kafka’s API keys or a stable cross-version public binary schema. Client REST submission, internal control RPC, inter-task data exchange, and Kafka client traffic require different endpoints and diagnostics.</p>
+      <p>Illustrative ports often seen in examples are Kafka 9092 and Flink REST 8081, but do not use those as a firewall specification. Listener configuration, advertised.listeners, TLS/SASL listeners, JobManager/TaskManager RPC and data port settings determine the actual network map. Verify the running configuration.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-headers">k-headers</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-taskrpc">f-taskrpc</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-ackrpc">f-ackrpc</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-barrier">f-barrier</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-remote">f-remote</a></div></section>
+<section id="checkpoint"><h2>7. Exactly-once is a recovery protocol, not a packet flag</h2>
+      <figure class="diagram" id="rpc-checkpoint"><figcaption><h3>The checkpoint ties recovery positions to sink intent</h3><p>Aligned checkpoint sketch; each downstream task is triggered by barriers on data channels. “RPC accepted” is not “snapshot durable.” The coordinator waits for all required task/coordinator state, not only the source.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-checkpoint.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-checkpoint.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: The checkpoint ties recovery positions to sink intent"><img src="diagrams/rpc-checkpoint.svg" alt="The checkpoint ties recovery positions to sink intent. Aligned checkpoint sketch; each downstream task is triggered by barriers on data channels. “RPC accepted” is not “snapshot durable.” The coordinator waits for all required task/coordinator state, not only the source." loading="lazy"></div></figure>
+      <p>At CP42 the mailbox establishes a consistent cut. The task’s pre-barrier hooks flush/prepare sink work, the barrier is broadcast, operator snapshots are initiated, and asynchronous snapshot futures are finalized. For aligned checkpoints, multi-input tasks wait for the matching barriers without letting post-barrier data overtake the cut. Unaligned checkpoints can include in-flight channel state instead; they do not eliminate snapshot I/O or sink commit work.</p>
+      <p>Only after required task and coordinator state is available and the completed checkpoint is stored does Flink issue completion notifications. Checkpoint files must be on durable storage reachable by replacement processes, with appropriate HA metadata/recovery configuration. A local temporary directory inside a lost pod is not sufficient for cluster recovery.</p>
+      <pre class="guide-pre"><code>Conceptual CP42 contents (not the exact serialized class layout):
+source:       orders/P0 -&gt; next offset 105
+operator:     customer-7 total -&gt; 250 at the same logical cut
+sink:         recoverable transaction/committable identity T42
+coordinator:  source split-assignment state
+optional:     channel state for an unaligned checkpoint</code></pre>
+      <figure class="diagram" id="rpc-transaction-visibility"><figcaption><h3>Completed checkpoint to externally visible output</h3><p>Healthy KafkaSink commit path. The group-offset commit is independent bookkeeping. EndTxn success confirms the coordinator decision; control markers and the partition LSO govern read_committed visibility.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-transaction-visibility.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-transaction-visibility.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Completed checkpoint to externally visible output"><img src="diagrams/rpc-transaction-visibility.svg" alt="Completed checkpoint to externally visible output. Healthy KafkaSink commit path. The group-offset commit is independent bookkeeping. EndTxn success confirms the coordinator decision; control markers and the partition LSO govern read_committed visibility." loading="lazy"></div></figure>
+      <p>There are two different after-checkpoint actions: the sink commits output T42, and the source may commit offset 105 to __consumer_offsets. Standard KafkaSource → KafkaSink does <strong>not</strong> call sendOffsetsToTransaction to place both actions in one Kafka transaction. Flink’s durable checkpoint plus sink recovery protocol is the cross-system link.</p>
+      <p>Kafka’s transaction coordinator persists its decision in __transaction_state and sends WriteTxnMarkers to participant partition leaders. An EndTxn success response does not mean every marker has finished replicating. read_committed Fetch is bounded by the last stable offset; an earlier open transaction can hold visibility back. Aborted transaction batches remain log history but are filtered from read_committed application delivery. read_uncommitted can expose transactional records before their final outcome.</p>
+      <p>Version caveat: older transaction sequences explicitly register partitions via AddPartitionsToTxn; newer transaction protocol versions integrate more partition registration/verification into Produce. Neither sequence implies that every application record causes its own AddPartitionsToTxn RPC. Use the catalog’s versioned schemas and the negotiated client/broker feature level.</p>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#f-barrier">f-barrier</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-async">f-async</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-complete">f-complete</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-sinkop">f-sinkop</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-prepare">f-prepare</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-committerop">f-committerop</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-commit">f-commit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-offsetcommit">f-offsetcommit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-endtxn">k-endtxn</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-lso">k-lso</a></div></section>
+<section id="storage"><h2>8. Put every piece of state in the correct store</h2>
+      <figure class="diagram" id="rpc-storage"><figcaption><h3>Four stores answer four different questions</h3><p>A Kafka topic is not a pod. Its partitions and replicas live across broker logs. A Flink keyed-state backend is not Kafka Streams’ changelog topic. The JobManager manages handles/metadata, not all workers’ state bytes.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-storage.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-storage.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Four stores answer four different questions"><img src="diagrams/rpc-storage.svg" alt="Four stores answer four different questions. A Kafka topic is not a pod. Its partitions and replicas live across broker logs. A Flink keyed-state backend is not Kafka Streams’ changelog topic. The JobManager manages handles/metadata, not all workers’ state bytes." loading="lazy"></div></figure>
+      <div class="table-scroll"><table><thead><tr><th>State</th><th>Primary owner / durable location</th><th>Recovery / caveat</th></tr></thead><tbody><tr><td>Input/output events</td><td>Kafka user-topic partition replica logs</td><td>Replay retained input after restore. Topic retention/deletion can remove required recovery history.</td></tr><tr><td>Consumer group offsets/membership</td><td>Group coordinator; __consumer_offsets</td><td>External progress and group protocol state. Not the authoritative Flink checkpoint source position.</td></tr><tr><td>Transaction decisions</td><td>Transaction coordinator; __transaction_state</td><td>Reload coordinator state and finish/retry decisions and markers. Transaction timeout and producer fencing still matter.</td></tr><tr><td>Commit/abort markers + producer sequence state</td><td>Participant partition logs plus local recovery metadata</td><td>Detect duplicate producer retries and compute transactional visibility. Idempotent producer identity is not a global business-key deduplication database.</td></tr><tr><td>Cluster metadata</td><td>KRaft metadata log and snapshots</td><td>Broker/controller registrations, topic/partition assignments and leadership. Separate from user record logs and Flink checkpoints.</td></tr><tr><td>Live keyed/operator state</td><td>TaskManager configured state backend: e.g. heap or RocksDB working state</td><td>Low-latency local access; durable snapshots/changelog mechanisms depend on backend. Losing local files is recoverable only with usable remote state.</td></tr><tr><td>Flink source splits and sink committables</td><td>Checkpoint state + completed checkpoint metadata/handles</td><td>Restore to the same logical cut, then recover sink commits. JobManager is not the sole holder of all state bytes.</td></tr><tr><td>Kafka Streams local stores</td><td>Streams application plus changelog/repartition topics when configured</td><td>Different runtime from Flink; do not draw an automatic Kafka changelog topic for every Flink keyed state.</td></tr><tr><td>Kafka Connect metadata</td><td>Distributed worker config, offset and status topics</td><td>Different runtime from KafkaSource. Source/sink task delivery depends on the connector and mode.</td></tr><tr><td>Share delivery state</td><td>Share coordinator; share state internal storage</td><td>Different acknowledgement model from ordinary KafkaSource offsets. This chapter does not apply share-group transactional designs to the normal source.</td></tr></tbody></table></div>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-log">k-log</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-lso">k-lso</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-endtxn">k-endtxn</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-reader">f-reader</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-prepare">f-prepare</a></div></section>
+<section id="failures"><h2>9. Failure cases: what fails, what survives, what gets retried</h2>
+      <figure class="diagram" id="rpc-recovery"><figcaption><h3>Failure after checkpoint completion but before commit reply</h3><p>Illustrative recoverable case: CP42 is durable and T42 has not timed out. Retrying the same transaction is not resending its business records in a new transaction. Unknown/fatal commit outcomes must not be silently ignored.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-recovery.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-recovery.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Failure after checkpoint completion but before commit reply"><img src="diagrams/rpc-recovery.svg" alt="Failure after checkpoint completion but before commit reply. Illustrative recoverable case: CP42 is durable and T42 has not timed out. Retrying the same transaction is not resending its business records in a new transaction. Unknown/fatal commit outcomes must not be silently ignored." loading="lazy"></div></figure>
+      <div class="table-scroll"><table><thead><tr><th>Failure point</th><th>Recovery / distributed response</th><th>Boundary or risk</th></tr></thead><tbody><tr><td>Produce reply lost after append</td><td>Client retries; idempotent producer identity/epoch/sequence suppresses applicable duplicate retries.</td><td>A timeout is ambiguous. Non-idempotent retries or resending the business event using a new identity can duplicate it.</td></tr><tr><td>Input partition leader dies</td><td>Controller chooses an eligible leader; clients refresh metadata/epochs and reconnect.</td><td>Availability depends on surviving replicas and election policy. Unclean election trades availability for possible data loss.</td></tr><tr><td>ISR drops below minimum</td><td>acks=all writes fail/wait according to the request and ISR state; replicas must catch up or policy must change.</td><td>Lowering minimum ISR is a durability tradeoff, not a harmless timeout fix.</td></tr><tr><td>One controller fails</td><td>A healthy metadata quorum can elect/continue with a majority.</td><td>Losing the quorum blocks metadata decisions. Existing data service may continue temporarily, but failover/control operations are impaired; do not promise indefinite availability.</td></tr><tr><td>Source reader dies before CP42 completes</td><td>Restart affected execution region/job according to strategy; restore last completed checkpoint CP41 and replay retained input.</td><td>Fetched/emitted records beyond CP41 can be processed again. Exactly-once does not mean the map function runs once.</td></tr><tr><td>Transform throws / deserialization fails</td><td>Fail task and recover according to restart strategy unless application explicitly routes the error.</td><td>A deterministic poison record can fail every retry. Dropping it or using a dead-letter path changes application semantics and must be designed.</td></tr><tr><td>Sink write fails before snapshot ACK</td><td>Async producer failure reaches writer/flush; checkpoint cannot safely certify that sink work.</td><td>Do not swallow producer callbacks or mark a failed write as successful.</td></tr><tr><td>Crash after output write but before checkpoint completion</td><td>Restore prior completed cut; abort/fence lingering uncommitted work as supported; replay input.</td><td>read_committed hides abandoned transactions. At-least-once nontransactional output may already be visible and can duplicate.</td></tr><tr><td>Crash after checkpoint completion before commit finishes</td><td>Restore pending committables and retry/recover the same transaction.</td><td>Requires retained checkpoint and viable transaction state. Fatal/expired/fenced transactions are not magically converted into successful commits.</td></tr><tr><td>Checkpoint storage unavailable</td><td>Checkpoint attempts fail/time out; processing may continue until configured failure tolerance/restart policy intervenes.</td><td>Exactly-once sink visibility can lag, state/transactions accumulate and recovery age grows.</td></tr><tr><td>Transaction times out during long outage</td><td>Kafka may abort; recovered committer can encounter fencing/invalid state and fail.</td><td>Size transaction timeout for checkpoint duration plus expected recovery window, within broker limits; no finite timeout tolerates an unlimited outage.</td></tr><tr><td>Optional source OffsetCommit fails after CP42</td><td>Log/metric records failure; Flink still restores from CP42 split state.</td><td>External lag/group offsets may be stale. Do not rewind checkpoint recovery to that stale external offset.</td></tr><tr><td>TaskManager pod/node disappears</td><td>Heartbeat loss → scheduler failover → replacement slots → restore state.</td><td>All tasks in that process fail together; multiple pods on one node can fail together. Spare capacity and state-transfer speed determine recovery latency.</td></tr><tr><td>JobManager process disappears</td><td>With HA, new leader retrieves job/checkpoint metadata, fences old leadership and recovers tasks.</td><td>Kubernetes restarting a container alone does not guarantee that durable HA metadata and checkpoints were configured.</td></tr><tr><td>Input retention expires before restore</td><td>Checkpoint points before available log start; initialization/reset policy or explicit failure applies.</td><td>Cannot reconstruct deleted history. Silent offset reset can lose business data.</td></tr><tr><td>Slow downstream sink / hot key</td><td>Output buffers fill, credits disappear, mailbox/fetch progress slows, lag grows upstream.</td><td>This is backpressure, not necessarily network failure. More source parallelism cannot split one indivisible hot key’s state update.</td></tr></tbody></table></div>
+      <div class="refs">Source: <a class="cite" href="kafka-flink-distributed-runtime.html#k-isr">k-isr</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-lso">k-lso</a> <a class="cite" href="kafka-flink-distributed-runtime.html#k-endtxn">k-endtxn</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-offsetcommit">f-offsetcommit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#f-commit">f-commit</a> <a class="cite" href="kafka-flink-distributed-runtime.html#t-retry">t-retry</a> <a class="cite" href="kafka-flink-distributed-runtime.html#t-recovery">t-recovery</a></div></section>
+<section id="tradeoffs"><h2>10. Throughput, latency, durability and availability tradeoffs</h2>
+      <div class="table-scroll"><table><thead><tr><th>Design lever</th><th>Benefit</th><th>Cost / diagnostic question</th></tr></thead><tbody><tr><td>Larger producer batches / linger / compression</td><td>Fewer requests, better compression and amortized I/O.</td><td>More waiting/memory/CPU; distinguish client enqueue latency from broker ACK latency and committed visibility latency.</td></tr><tr><td>Fetch min bytes / max wait / batch size</td><td>Amortize request overhead and move more bytes per fetch.</td><td>Low-volume streams may wait longer; large batches increase queue memory and per-turn work.</td></tr><tr><td>More topic partitions / Flink parallelism</td><td>More independent leaders/readers/key groups and greater aggregate capacity.</td><td>More metadata, connections, files and state redistribution. Small keys/partitions can skew; too many idle tasks add overhead.</td></tr><tr><td>Operator chaining</td><td>Avoid network serialization, queues and scheduling between compatible operators.</td><td>Shared blocking/CPU/failure behavior; fewer independent scaling boundaries.</td></tr><tr><td>Separate tasks/pods</td><td>Independent resource placement and some failure isolation.</td><td>Serialization, network buffers, RTT and operational cost. More pods do not automatically create more useful parallel work.</td></tr><tr><td>Higher replication / stricter ISR</td><td>More resilience to replica loss and stronger acknowledgement requirements.</td><td>More network/disk work and potentially lower write availability when replicas lag.</td></tr><tr><td>Short checkpoint interval</td><td>Younger recovery point and often earlier transactional output publication.</td><td>More state I/O, coordination and transactions. Under load, duration/alignment may dominate the configured interval.</td></tr><tr><td>Unaligned checkpoints</td><td>Can reduce alignment delay under backpressure.</td><td>Snapshots include in-flight channel data; more checkpoint/storage/recovery I/O. Does not make a slow sink fast.</td></tr><tr><td>Larger queues/buffers</td><td>Absorb bursts and improve batching.</td><td>More memory, tail latency and volatile in-flight work. Buffers delay overload; they do not fix sustained arrival rate above service rate.</td></tr><tr><td>Local embedded state vs remote checkpoint storage</td><td>Local state is fast; remote durable state makes worker replacement possible.</td><td>Serialization/upload/download overhead and recovery duration; incremental snapshots reduce some transfer, not all metadata work.</td></tr><tr><td>Exactly-once transactional sink</td><td>Hide aborted/replayed attempts from read_committed readers.</td><td>Commit coordination, timeout management and visibility delay. At-least-once + business-key deduplication is a different design with different costs.</td></tr></tbody></table></div>
+      <pre class="guide-pre"><code>Analytical model — estimates, not benchmark results:
+visible latency ≈ source wait + compute + queues + sink batching
+                + wait for checkpoint completion + transaction visibility delay
+recovery time  ≈ failure detection + scheduling + state restore + replay/catch-up
+stable system requires sustained arrival rate &lt; bottleneck service rate
+replay work depends on retained input after the last completed checkpoint</code></pre>
+      <p>Measure each term. Useful views include producer queue/request latency and retries; broker request queue/local/remote time and under-replicated partitions; Flink busy/backpressured/idle time, checkpoint duration/alignment/state size and failed checkpoints; source lag and sink errors. Metric names/labels vary by version and reporter. No numeric throughput or latency guarantee was measured for this chapter.</p></section>
+<section id="sink-contract"><h2>11. What changes if the sink is not Kafka?</h2>
+      <div class="table-scroll"><table><thead><tr><th>Sink contract</th><th>What must be coordinated</th><th>What cannot be assumed</th></tr></thead><tbody><tr><td>Kafka transactional sink</td><td>Checkpointed committable → transaction decision → partition markers → read_committed visibility.</td><td>The output transaction does not atomically include Flink source group offsets.</td></tr><tr><td>Transactional database connector</td><td>Checkpoint-linked transaction/precommit handle and recoverable commit, subject to database/connector support.</td><td>A JDBC insert acknowledged once is not by itself end-to-end exactly-once.</td></tr><tr><td>Idempotent upsert/deduplicating sink</td><td>Stable business key or event ID with well-defined update/dedup semantics.</td><td>Producer idempotence does not deduplicate arbitrary HTTP side effects or repeated application-generated events.</td></tr><tr><td>Lakehouse table sink (e.g. Iceberg)</td><td>Write data/delete files, then publish table metadata/snapshot using the connector’s commit protocol.</td><td>Object file upload is not the table commit point; abandoned files and commit retries need handling.</td></tr><tr><td>Arbitrary HTTP/email side effect in map</td><td>External idempotency key/outbox/transactional design if duplicates matter.</td><td>Flink checkpoint rollback cannot unsend an email or undo an uncoordinated external call.</td></tr></tbody></table></div>
+      <p>For table commit detail, continue with <a href="iceberg-storage-commits.html">Iceberg storage and commits</a>. For broad guarantee comparisons, see <a href="06-delivery-and-recovery.html">delivery and recovery</a>. This chapter makes exact connector-code claims for KafkaSink; the other rows are design contracts, not validation of an installed database/lakehouse connector.</p></section>
+<section id="verify-placement"><h2>12. How to check the real deployment instead of guessing</h2>
+      <div class="table-scroll"><table><thead><tr><th>Question to investigate</th><th>Read-only evidence to collect</th></tr></thead><tbody><tr><td>Which processes are in which pods?</td><td>Kubernetes pod/container listing, node placement, command/args, controller owner and image versions. Do not copy environment variables or secrets into notes.</td></tr><tr><td>Which operators share a task?</td><td>Flink Web UI job graph, chained operator labels, subtask-to-TaskManager mapping and actual job plan. Source and sink parallelism alone do not show placement.</td></tr><tr><td>Which thread is busy?</td><td>TaskManager thread dump: task/mailbox threads, SplitFetcher, kafka-producer-network-thread and Netty threads. Names are diagnostic hints, not a stable ABI.</td></tr><tr><td>Where does each connection go?</td><td>Advertised Kafka metadata and FindCoordinator result; Flink RPC/data configuration; network policy and socket telemetry. Bootstrap success is insufficient.</td></tr><tr><td>What is durable?</td><td>Last completed checkpoint and storage location/retention, HA metadata, broker replica/ISR state, persistent volume/failure-domain placement.</td></tr><tr><td>Why is output not visible?</td><td>Checkpoint completion, pending committables, transaction outcome/timeout, output partition LSO and downstream isolation.level. Distinguish “not produced” from “produced but not committed.”</td></tr></tbody></table></div>
+      <p>No Kubernetes cluster, running job, pod layout, network capture or fault-injection experiment was inspected for this addition. Pod diagrams are explicitly illustrative. Implementation behavior is source-backed at the pinned revisions below, not a report of your deployed cluster.</p></section>
+<section id="evidence"><h2>13. Source trail, code excerpts and validation limits</h2>
+      <p>The source and test links below are pinned to the inspected commits. Expand a component to see its class/module, exact file and line-numbered excerpt. These are three separately inspected repository revisions: the connector POM declares a Flink 2.2.1 / kafka-clients 4.2.0 baseline, so the Kafka HEAD schema catalog is not a claim that every API/version is emitted by that connector client or enabled by every cluster.</p>
+      <p>Tests were read/located as evidence, not executed against Kafka/Flink for this documentation change. The documentation generator, schema completeness, internal links, diagrams and browser behavior are validated separately. Full API schema data and Apache attribution are included in the <a href="kafka-rpc-atlas.html">RPC atlas</a>.</p>
+      <div class="table-scroll"><table><thead><tr><th>Repository</th><th>Inspected commit</th></tr></thead><tbody><tr><td>Kafka</td><td>d2da6a18f839ce8b2eeb4db8e7515200258b0f81</td></tr><tr><td>flink</td><td>07805482705f4b703cd19517ecedf12014b7b762</td></tr><tr><td>flink-connector-kafka</td><td>ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b</td></tr></tbody></table></div><p class="guide-footer-note">Source excerpts and schemas originate in Apache projects under Apache License 2.0. <a href="https://www.apache.org/licenses/LICENSE-2.0">License</a>. Full schema source retains upstream license headers.</p><details class="code" id="k-producer"><summary>k-producer · KafkaProducer.java:478</summary><p>KafkaProducer starts a Sender network thread; send appends to the producer accumulator.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java#L478">Kafka/clients/src/main/java/org/apache/kafka/clients/producer/KafkaProducer.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>  476              String ioThreadName = NETWORK_THREAD_PREFIX + &quot; | &quot; + clientId;
+  477              this.ioThread = new Sender.SenderThread(ioThreadName, this.sender, true);
+  478              this.ioThread.start();
+  479              config.logUnused();
+  480              AppInfoParser.registerAppInfo(JMX_PREFIX, clientId, metrics, time.milliseconds());
+  481              log.debug(&quot;Kafka producer started&quot;);
+  482          } catch (Throwable t) {
+  483              // call close methods if internal objects are already constructed this is to prevent resource leak. see KAFKA-2121
+  484              close(Duration.ofMillis(0), true);
+  485              // now propagate the exception
+  486              throw new KafkaException(&quot;Failed to construct kafka producer&quot;, t);
+  487          }
+  488      }
+  489
+  490      // visible for testing
+  491      KafkaProducer(ProducerConfig config,
+  492                    LogContext logContext,
+  493                    Metrics metrics,
+  494                    Serializer&lt;K&gt; keySerializer,
+  495                    Serializer&lt;V&gt; valueSerializer,</code></pre></details>
+<details class="code" id="k-socket"><summary>k-socket · SocketServer.scala:899</summary><p>Processor loops over selector I/O and completed receives/sends.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/network/SocketServer.scala#L899">Kafka/core/src/main/scala/kafka/network/SocketServer.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  897            configureNewConnections()
+  898            // register any new responses for writing
+  899            processNewResponses()
+  900            poll()
+  901            processCompletedReceives()
+  902            processCompletedSends()
+  903            processDisconnected()
+  904            closeExcessConnections()
+  905          } catch {
+  906            // We catch all the throwables here to prevent the processor thread from exiting. We do this because
+  907            // letting a processor exit might cause a bigger impact on the broker. This behavior might need to be
+  908            // reviewed if we see an exception that needs the entire broker to stop. Usually the exceptions thrown would
+  909            // be either associated with a specific socket channel or a bad request. These exceptions are caught and
+  910            // processed by the individual methods above which close the failing channel and continue processing other
+  911            // channels. So this catch block should only ever see ControlThrowables.
+  912            case e: Throwable =&gt; processException(&quot;Processor got uncaught exception.&quot;, e)
+  913          }
+  914        }
+  915      } finally {
+  916        debug(s&quot;Closing selector - processor $id&quot;)</code></pre></details>
+<details class="code" id="k-handler"><summary>k-handler · KafkaRequestHandler.scala:162</summary><p>Request-handler threads dispatch requests to the API implementation.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaRequestHandler.scala#L162">Kafka/core/src/main/scala/kafka/server/KafkaRequestHandler.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  160            }
+  161
+  162          case request: Request =&gt;
+  163            try {
+  164              request.requestDequeueTimeNanos(endTime)
+  165              trace(s&quot;Kafka request handler $id on broker $brokerId handling request $request&quot;)
+  166              threadCurrentRequest.set(request)
+  167              apis.handle(request, requestLocal)
+  168            } catch {
+  169              case e: FatalExitError =&gt;
+  170                completeShutdown()
+  171                Exit.exit(e.statusCode)
+  172              case e: Throwable =&gt; error(&quot;Exception when handling request&quot;, e)
+  173            } finally {
+  174              threadCurrentRequest.remove()
+  175              request.releaseBuffer()
+  176            }
+  177
+  178          case _: WakeupRequest =&gt;
+  179            // We should handle this in receiveRequest by polling callbackQueue.</code></pre></details>
+<details class="code" id="k-produce"><summary>k-produce · KafkaApis.scala:547</summary><p>Produce routes to replica management after authorization/record checks.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L547">Kafka/core/src/main/scala/kafka/server/KafkaApis.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  545        val transactionSupportedOperation = AddPartitionsToTxnManager.produceRequestVersionToTransactionSupportedOperation(request.header.apiVersion())
+  546        // call the replica manager to append messages to the replicas
+  547        replicaManager.handleProduceAppend(
+  548          timeout = produceRequest.timeout.toLong,
+  549          requiredAcks = produceRequest.acks,
+  550          internalTopicsAllowed = internalTopicsAllowed,
+  551          transactionalId = produceRequest.transactionalId,
+  552          entriesPerPartition = authorizedRequestInfo,
+  553          responseCallback = sendResponseCallback,
+  554          recordValidationStatsCallback = processingStatsCallback,
+  555          requestLocal = requestLocal,
+  556          transactionSupportedOperation = transactionSupportedOperation)
+  557
+  558        // if the request is put into the purgatory, it will have a held reference and hence cannot be garbage collected;
+  559        // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
+  560        produceRequest.clearPartitionRecords()
+  561      }
+  562    }
+  563
+  564    /**</code></pre></details>
+<details class="code" id="k-fetch"><summary>k-fetch · KafkaApis.scala:773</summary><p>Fetch uses replica management with fetch isolation/limits.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaApis.scala#L773">Kafka/core/src/main/scala/kafka/server/KafkaApis.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  771
+  772        // call the replica manager to fetch messages from the local replica
+  773        replicaManager.fetchMessages(
+  774          params = params,
+  775          fetchInfos = interesting,
+  776          quota = replicationQuota(fetchRequest),
+  777          responseCallback = processResponseCallback,
+  778        )
+  779      }
+  780    }
+  781
+  782    def replicationQuota(fetchRequest: FetchRequest): ReplicaQuota =
+  783      if (fetchRequest.isFromFollower) quotas.leader else UNBOUNDED_QUOTA
+  784
+  785    def handleListOffsetRequest(request: Request): Unit = {
+  786      val correlationId = request.header.correlationId
+  787      val clientId = request.header.clientId
+  788      val offsetRequest = request.body(classOf[ListOffsetsRequest])
+  789      val version = request.header.apiVersion
+  790  </code></pre></details>
+<details class="code" id="k-isr"><summary>k-isr · Partition.scala:1234</summary><p>acks=all enforces the minimum ISR before append.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/cluster/Partition.scala#L1234">Kafka/core/src/main/scala/kafka/cluster/Partition.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code> 1232
+ 1233            // Avoid writing to leader if there are not enough insync replicas to make it safe
+ 1234            if (inSyncSize &lt; minIsr &amp;&amp; requiredAcks == -1) {
+ 1235              throw new NotEnoughReplicasException(s&quot;The size of the current ISR : $inSyncSize &quot; +
+ 1236                s&quot;is insufficient to satisfy the min.isr requirement of $minIsr for partition $topicPartition, &quot; +
+ 1237                s&quot;live replica(s) broker.id are : $inSyncReplicaIds&quot;)
+ 1238            }
+ 1239
+ 1240            val info = leaderLog.appendAsLeader(records, this.leaderEpoch, origin, requestLocal, verificationGuard, transactionVersion)
+ 1241
+ 1242            // we may need to increment high watermark since ISR could be down to 1
+ 1243            (info, maybeIncrementLeaderHW(leaderLog))
+ 1244
+ 1245          case None =&gt;
+ 1246            throw new NotLeaderOrFollowerException(&quot;Leader not local for partition %s on broker %d&quot;
+ 1247              .format(topicPartition, localBrokerId))
+ 1248        }
+ 1249      })
+ 1250
+ 1251      info.copy(if (leaderHWIncremented) LeaderHwChange.INCREASED else LeaderHwChange.SAME)</code></pre></details>
+<details class="code" id="k-delayed"><summary>k-delayed · ReplicaManager.scala:903</summary><p>Replication waits use delayed operations and callbacks.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/ReplicaManager.scala#L903">Kafka/core/src/main/scala/kafka/server/ReplicaManager.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  901        }
+  902
+  903        val delayedProduce = new DelayedProduce(timeoutMs, initialProduceStatus.asJava, delegate, responseCallback.asJava)
+  904
+  905        // create a list of (topic, partition) pairs to use as keys for this delayed produce operation
+  906        val producerRequestKeys = entriesPerPartition.keys.map(new TopicPartitionOperationKey(_)).toList
+  907
+  908        // try to complete the request immediately, otherwise put it into the purgatory
+  909        // this is because while the delayed produce operation is being created, new
+  910        // requests may arrive and hence make this operation completable.
+  911        delayedProducePurgatory.tryCompleteElseWatch(delayedProduce, producerRequestKeys.asJava)
+  912      } else {
+  913        // we can respond immediately
+  914        val produceResponseStatus = new util.HashMap[TopicIdPartition, PartitionResponse]
+  915        initialProduceStatus.foreach { case (k, status) =&gt; produceResponseStatus.put(k, status.responseStatus) }
+  916        responseCallback(produceResponseStatus)
+  917      }
+  918    }
+  919
+  920    private def sendInvalidRequiredAcksResponse(</code></pre></details>
+<details class="code" id="k-log"><summary>k-log · UnifiedLog.java:1286</summary><p>Append and flush policy are separate; replication ACK is not a per-record fsync receipt.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java#L1286">Kafka/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java</a> · d2da6a18f839</p><pre class="guide-pre"><code> 1284                                          appendInfo.lastOffset(), appendInfo.firstOffset(), localLog.logEndOffset(), validRecords);
+ 1285
+ 1286                                  if (localLog.unflushedMessages() &gt;= config().flushInterval) flush(false);
+ 1287                              }
+ 1288                              return appendInfo;
+ 1289                          });
+ 1290              }
+ 1291          }
+ 1292      }
+ 1293
+ 1294      public void assignEpochStartOffset(int leaderEpoch, long startOffset) {
+ 1295          leaderEpochCache.assign(leaderEpoch, startOffset);
+ 1296      }
+ 1297
+ 1298      public Optional&lt;Integer&gt; latestEpoch() {
+ 1299          return leaderEpochCache.latestEpoch();
+ 1300      }
+ 1301
+ 1302      public Optional&lt;OffsetAndEpoch&gt; endOffsetForEpoch(int leaderEpoch) {
+ 1303          Map.Entry&lt;Integer, Long&gt; entry = leaderEpochCache.endOffsetFor(leaderEpoch, logEndOffset());</code></pre></details>
+<details class="code" id="k-lso"><summary>k-lso · UnifiedLog.java:678</summary><p>Last stable offset limits transactionally visible reads.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java#L678">Kafka/storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>  676       * beyond the high watermark.
+  677       */
+  678      public long lastStableOffset() {
+  679          // cache the first unstable offset metadata to avoid a concurrent update breaking the isPresent check
+  680          Optional&lt;LogOffsetMetadata&gt; firstUnstableOffsetMetadataCopy = firstUnstableOffsetMetadata;
+  681          if (firstUnstableOffsetMetadataCopy.isPresent() &amp;&amp; firstUnstableOffsetMetadataCopy.get().messageOffset &lt; highWatermark()) {
+  682              return firstUnstableOffsetMetadataCopy.get().messageOffset;
+  683          } else {
+  684              return highWatermark();
+  685          }
+  686      }
+  687
+  688      public long lastStableOffsetLag() {
+  689          return highWatermark() - lastStableOffset();
+  690      }
+  691
+  692      /**
+  693       * Fully materialize and return an offset snapshot including segment position info. This method will update
+  694       * the LogOffsetMetadata for the high watermark and last stable offset if they are message-only. Throws an
+  695       * offset out of range error if the segment info cannot be loaded.</code></pre></details>
+<details class="code" id="k-endtxn"><summary>k-endtxn · TransactionCoordinator.scala:677</summary><p>EndTxn can reply before transaction markers finish propagating.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala#L677">Kafka/core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  675
+  676                  case Right((txnMetadata, newPreSendMetadata)) =&gt;
+  677                    // we can respond to the client immediately and continue to write the txn markers if
+  678                    // the log append was successful
+  679                    responseCallback(Errors.NONE, RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH)
+  680
+  681                    txnMarkerChannelManager.addTxnMarkersToSend(coordinatorEpoch, txnMarkerResult, txnMetadata, newPreSendMetadata)
+  682                }
+  683              } else {
+  684                info(s&quot;Aborting sending of transaction markers and returning $error error to client for $transactionalId's EndTransaction request of $txnMarkerResult, &quot; +
+  685                  s&quot;since appending $newMetadata to transaction log with coordinator epoch $coordinatorEpoch failed&quot;)
+  686
+  687                if (isEpochFence) {
+  688                  txnManager.getTransactionState(transactionalId).foreach {
+  689                    case None =&gt;
+  690                      warn(s&quot;The coordinator still owns the transaction partition for $transactionalId, but there is &quot; +
+  691                        s&quot;no metadata in the cache; this is not expected&quot;)
+  692
+  693                    case Some(epochAndMetadata) =&gt;
+  694                      if (epochAndMetadata.coordinatorEpoch == coordinatorEpoch) {</code></pre></details>
+<details class="code" id="k-roles"><summary>k-roles · KafkaRaftServer.scala:76</summary><p>process.roles selects broker/controller components in a server process.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/KafkaRaftServer.scala#L76">Kafka/core/src/main/scala/kafka/server/KafkaRaftServer.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>   74    )
+   75
+   76    private val broker: Option[BrokerServer] = if (config.processRoles.contains(ProcessRole.BrokerRole)) {
+   77      Some(new BrokerServer(sharedServer))
+   78    } else {
+   79      None
+   80    }
+   81
+   82    private val controller: Option[ControllerServer] = if (config.processRoles.contains(ProcessRole.ControllerRole)) {
+   83      Some(new ControllerServer(
+   84        sharedServer,
+   85        KafkaRaftServer.configSchema,
+   86        bootstrapMetadata,
+   87      ))
+   88    } else {
+   89      None
+   90    }
+   91
+   92    override def startup(): Unit = {
+   93      Mx4jLoader.maybeLoad()</code></pre></details>
+<details class="code" id="k-broker"><summary>k-broker · BrokerServer.scala:409</summary><p>Coordinator components are instantiated in the broker, not automatically separate pods.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/main/scala/kafka/server/BrokerServer.scala#L409">Kafka/core/src/main/scala/kafka/server/BrokerServer.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code>  407        partitionMetadataClient = createPartitionMetadataClient(metadataCache)
+  408
+  409        groupCoordinator = createGroupCoordinator()
+  410
+  411        val producerIdManagerSupplier = () =&gt; ProducerIdManager.rpc(
+  412          config.brokerId,
+  413          time,
+  414          () =&gt; lifecycleManager.brokerEpoch,
+  415          clientToControllerChannelManager
+  416        )
+  417
+  418        // Create transaction coordinator, but don't start it until we've started replica manager.
+  419        // Hardcode Time.SYSTEM for now as some Streams tests fail otherwise, it would be good to fix the underlying issue
+  420        transactionCoordinator = TransactionCoordinator(config, replicaManager,
+  421          new KafkaScheduler(1, true, &quot;transaction-log-manager-&quot;),
+  422          producerIdManagerSupplier, metrics, metadataCache, Time.SYSTEM)
+  423
+  424        autoTopicCreationManager = new DefaultAutoTopicCreationManager(
+  425          config,
+  426          () =&gt; groupCoordinator.groupMetadataTopicConfigs,</code></pre></details>
+<details class="code" id="k-headers"><summary>k-headers · ApiMessageTypeGenerator.java:346</summary><p>Generated header-version selection includes the ApiVersions response-header exception.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/generator/src/main/java/org/apache/kafka/message/ApiMessageTypeGenerator.java#L346">Kafka/generator/src/main/java/org/apache/kafka/message/ApiMessageTypeGenerator.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>  344      }
+  345
+  346      private void generateHeaderVersion(String type) {
+  347          buffer.printf(&quot;public short %sHeaderVersion(short _version) {%n&quot;, type);
+  348          buffer.incrementIndent();
+  349          buffer.printf(&quot;switch (apiKey) {%n&quot;);
+  350          buffer.incrementIndent();
+  351          for (Map.Entry&lt;Short, ApiData&gt; entry : apis.entrySet()) {
+  352              short apiKey = entry.getKey();
+  353              ApiData apiData = entry.getValue();
+  354              String name = apiData.name();
+  355
+  356              MessageSpec spec = messageSpec(type, apiKey, entry.getValue());
+  357              if (!spec.hasValidVersion())
+  358                  continue;
+  359
+  360              buffer.printf(&quot;case %d: // %s%n&quot;, apiKey, MessageGenerator.capitalizeFirst(name));
+  361              buffer.incrementIndent();
+  362              if (type.equals(&quot;response&quot;) &amp;&amp; apiKey == 18) {
+  363                  buffer.printf(&quot;// ApiVersionsResponse always includes a v0 header.%n&quot;);</code></pre></details>
+<details class="code" id="k-record"><summary>k-record · DefaultRecordBatch.java:104</summary><p>Record-batch header is a separate binary structure inside Records.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/common/record/internal/DefaultRecordBatch.java#L104">Kafka/clients/src/main/java/org/apache/kafka/common/record/internal/DefaultRecordBatch.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>  102   */
+  103  public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRecordBatch {
+  104      static final int BASE_OFFSET_OFFSET = 0;
+  105      static final int BASE_OFFSET_LENGTH = 8;
+  106      static final int LENGTH_OFFSET = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
+  107      static final int LENGTH_LENGTH = 4;
+  108      static final int PARTITION_LEADER_EPOCH_OFFSET = LENGTH_OFFSET + LENGTH_LENGTH;
+  109      static final int PARTITION_LEADER_EPOCH_LENGTH = 4;
+  110      static final int MAGIC_OFFSET = PARTITION_LEADER_EPOCH_OFFSET + PARTITION_LEADER_EPOCH_LENGTH;
+  111      static final int MAGIC_LENGTH = 1;
+  112      public static final int CRC_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
+  113      static final int CRC_LENGTH = 4;
+  114      static final int ATTRIBUTES_OFFSET = CRC_OFFSET + CRC_LENGTH;
+  115      static final int ATTRIBUTE_LENGTH = 2;
+  116      public static final int LAST_OFFSET_DELTA_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+  117      static final int LAST_OFFSET_DELTA_LENGTH = 4;
+  118      static final int BASE_TIMESTAMP_OFFSET = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
+  119      static final int BASE_TIMESTAMP_LENGTH = 8;
+  120      static final int MAX_TIMESTAMP_OFFSET = BASE_TIMESTAMP_OFFSET + BASE_TIMESTAMP_LENGTH;
+  121      static final int MAX_TIMESTAMP_LENGTH = 8;</code></pre></details>
+<details class="code" id="k-consumer"><summary>k-consumer · ConsumerDelegateCreator.java:57</summary><p>Consumer implementation depends on group.protocol; do not assume identical internal I/O threads.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java#L57">Kafka/clients/src/main/java/org/apache/kafka/clients/consumer/internals/ConsumerDelegateCreator.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>   55  public class ConsumerDelegateCreator {
+   56
+   57      public &lt;K, V&gt; ConsumerDelegate&lt;K, V&gt; create(ConsumerConfig config,
+   58                                                  Deserializer&lt;K&gt; keyDeserializer,
+   59                                                  Deserializer&lt;V&gt; valueDeserializer) {
+   60          try {
+   61              GroupProtocol groupProtocol = GroupProtocol.valueOf(config.getString(ConsumerConfig.GROUP_PROTOCOL_CONFIG).toUpperCase(Locale.ROOT));
+   62
+   63              if (groupProtocol == GroupProtocol.CONSUMER)
+   64                  return new AsyncKafkaConsumer&lt;&gt;(config, keyDeserializer, valueDeserializer, Optional.empty());
+   65              else
+   66                  return new ClassicKafkaConsumer&lt;&gt;(config, keyDeserializer, valueDeserializer);
+   67          } catch (KafkaException e) {
+   68              throw e;
+   69          } catch (Throwable t) {
+   70              throw new KafkaException(&quot;Failed to construct Kafka consumer&quot;, t);
+   71          }
+   72      }
+   73
+   74      public &lt;K, V&gt; ConsumerDelegate&lt;K, V&gt; create(LogContext logContext,</code></pre></details>
+<details class="code" id="f-pom"><summary>f-pom · pom.xml:56</summary><p>Connector build baseline is Flink 2.2.1 and kafka-clients 4.2.0; separately inspected HEADs are not a tested release bundle.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/pom.xml#L56">flink-connector-kafka/pom.xml</a> · ae656dd6fe23</p><pre class="guide-pre"><code>   54  		&lt;!-- Main Dependencies --&gt;
+   55  		&lt;confluent.version&gt;7.9.2&lt;/confluent.version&gt;
+   56  		&lt;flink.version&gt;2.2.1&lt;/flink.version&gt;
+   57  		&lt;kafka.version&gt;4.2.0&lt;/kafka.version&gt;
+   58
+   59  		&lt;!-- Other Dependencies --&gt;
+   60  		&lt;avro.version&gt;1.12.0&lt;/avro.version&gt;
+   61  		&lt;byte-buddy.version&gt;1.12.10&lt;/byte-buddy.version&gt;
+   62  		&lt;commons-cli.version&gt;1.9.0&lt;/commons-cli.version&gt;
+   63  		&lt;commons-codec.version&gt;1.18.0&lt;/commons-codec.version&gt;
+   64  		&lt;commons-compress.version&gt;1.27.1&lt;/commons-compress.version&gt;
+   65  		&lt;commons-io.version&gt;2.19.0&lt;/commons-io.version&gt;
+   66  		&lt;commons-lang3.version&gt;3.18.0&lt;/commons-lang3.version&gt;
+   67  		&lt;httpcore.version&gt;4.4.16&lt;/httpcore.version&gt;
+   68  		&lt;httpclient.version&gt;4.5.14&lt;/httpclient.version&gt;
+   69  		&lt;jackson-bom.version&gt;2.21.3&lt;/jackson-bom.version&gt;
+   70  		&lt;javassist.version&gt;3.30.2-GA&lt;/javassist.version&gt;
+   71  		&lt;jsr305.version&gt;1.3.9&lt;/jsr305.version&gt;
+   72  		&lt;kryo.version&gt;5.6.2&lt;/kryo.version&gt;
+   73  		&lt;log4j.version&gt;2.25.5&lt;/log4j.version&gt;</code></pre></details>
+<details class="code" id="f-source"><summary>f-source · KafkaSource.java:160</summary><p>Reader creation wires queue, split-reader supplier, fetcher manager and record emitter.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSource.java#L160">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/KafkaSource.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  158              SourceReaderContext readerContext, Consumer&lt;Collection&lt;String&gt;&gt; splitFinishedHook)
+  159              throws Exception {
+  160          FutureCompletingBlockingQueue&lt;RecordsWithSplitIds&lt;ConsumerRecord&lt;byte[], byte[]&gt;&gt;&gt;
+  161                  elementsQueue = new FutureCompletingBlockingQueue&lt;&gt;();
+  162          deserializationSchema.open(
+  163                  new DeserializationSchema.InitializationContext() {
+  164                      @Override
+  165                      public MetricGroup getMetricGroup() {
+  166                          return readerContext.metricGroup().addGroup(&quot;deserializer&quot;);
+  167                      }
+  168
+  169                      @Override
+  170                      public UserCodeClassLoader getUserCodeClassLoader() {
+  171                          return readerContext.getUserCodeClassLoader();
+  172                      }
+  173                  });
+  174          final KafkaSourceReaderMetrics kafkaSourceReaderMetrics =
+  175                  new KafkaSourceReaderMetrics(readerContext.metricGroup());
+  176
+  177          Supplier&lt;KafkaPartitionSplitReader&gt; splitReaderSupplier =</code></pre></details>
+<details class="code" id="f-enum"><summary>f-enum · KafkaSourceEnumerator.java:255</summary><p>Enumerator discovers partitions through async callbacks and owns split assignment.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/enumerator/KafkaSourceEnumerator.java#L255">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/enumerator/KafkaSourceEnumerator.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  253       */
+  254      @Override
+  255      public void start() {
+  256          adminClient = getKafkaAdminClient();
+  257
+  258          // Find splits where the start offset has been initialized but not yet assigned to readers.
+  259          // These splits must not be reinitialized to keep offsets consistent with first discovery.
+  260          final List&lt;KafkaPartitionSplit&gt; preinitializedSplits =
+  261                  unassignedSplits.values().stream()
+  262                          .filter(split -&gt; !split.isMigrated())
+  263                          .collect(Collectors.toList());
+  264          if (!preinitializedSplits.isEmpty()) {
+  265              addPartitionSplitChangeToPendingAssignments(preinitializedSplits);
+  266          }
+  267
+  268          if (topicIntegrityCheckEnabled &amp;&amp; subscriber instanceof TopicMetadataSettable) {
+  269              ((TopicMetadataSettable) subscriber).setTopicMetadataProvider(topicIntegrityProvider);
+  270          }
+  271
+  272          if (partitionDiscoveryIntervalMs &gt; 0) {</code></pre></details>
+<details class="code" id="f-assign"><summary>f-assign · KafkaPartitionSplitReader.java:262</summary><p>Kafka partitions are explicitly assigned; ordinary KafkaSource does not use group subscription assignment.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L262">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  260          // Assign new partitions.
+  261          newPartitionAssignments.addAll(consumer.assignment());
+  262          consumer.assign(newPartitionAssignments);
+  263
+  264          // Seek on the newly assigned partitions to their stating offsets.
+  265          seekToStartingOffsets(
+  266                  consumer,
+  267                  partitionsStartingFromEarliest,
+  268                  partitionsStartingFromLatest,
+  269                  partitionsStartingFromSpecifiedOffsets);
+  270          // Setup the stopping offsets.
+  271          acquireAndSetStoppingOffsets(
+  272                  consumer, partitionsStoppingAtLatest, partitionsStoppingAtCommitted);
+  273
+  274          // After acquiring the starting and stopping offsets, remove the empty splits if necessary.
+  275          removeEmptySplits(consumer);
+  276
+  277          maybeLogSplitChangesHandlingResult(consumer, splitsChange);
+  278      }
+  279  </code></pre></details>
+<details class="code" id="f-poll"><summary>f-poll · KafkaPartitionSplitReader.java:153</summary><p>SplitReader polls Kafka on the fetcher path.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java#L153">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaPartitionSplitReader.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  151
+  152      @Override
+  153      public RecordsWithSplitIds&lt;ConsumerRecord&lt;byte[], byte[]&gt;&gt; fetch() throws IOException {
+  154          final KafkaConsumer&lt;byte[], byte[]&gt; consumer = ensureConsumer();
+  155          ConsumerRecords&lt;byte[], byte[]&gt; consumerRecords;
+  156          try {
+  157              consumerRecords = consumer.poll(pollTimeout);
+  158          } catch (WakeupException | IllegalStateException e) {
+  159              // IllegalStateException will be thrown if the consumer is not assigned any partitions.
+  160              // This happens if all assigned partitions are invalid or empty (starting offset &gt;=
+  161              // stopping offset). We just mark empty partitions as finished and return an empty
+  162              // record container, and this consumer will be closed by SplitFetcherManager.
+  163              KafkaPartitionSplitRecords recordsBySplits =
+  164                      new KafkaPartitionSplitRecords(
+  165                              ConsumerRecords.empty(), kafkaSourceReaderMetrics);
+  166              markEmptySplitsAsFinished(recordsBySplits);
+  167              return recordsBySplits;
+  168          }
+  169          KafkaPartitionSplitRecords recordsBySplits =
+  170                  new KafkaPartitionSplitRecords(consumerRecords, kafkaSourceReaderMetrics);</code></pre></details>
+<details class="code" id="f-emit"><summary>f-emit · KafkaRecordEmitter.java:53</summary><p>Checkpointable next offset advances only after deserialize/emit.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java#L53">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaRecordEmitter.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>   51              sourceOutputWrapper.setSourceOutput(output);
+   52              sourceOutputWrapper.setTimestamp(consumerRecord.timestamp());
+   53              deserializationSchema.deserialize(consumerRecord, sourceOutputWrapper);
+   54              splitState.setCurrentOffset(consumerRecord.offset() + 1);
+   55          } catch (Exception e) {
+   56              throw new IOException(&quot;Failed to deserialize consumer record due to&quot;, e);
+   57          }
+   58      }
+   59
+   60      private static class SourceOutputWrapper&lt;T&gt; implements Collector&lt;T&gt; {
+   61
+   62          private SourceOutput&lt;T&gt; sourceOutput;
+   63          private long timestamp;
+   64
+   65          @Override
+   66          public void collect(T record) {
+   67              sourceOutput.collect(record, timestamp);
+   68          }
+   69
+   70          @Override</code></pre></details>
+<details class="code" id="f-reader"><summary>f-reader · KafkaSourceReader.java:98</summary><p>Source snapshot stores next-offset splits, independently of Kafka group-offset commits.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L98">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>   96
+   97      @Override
+   98      public List&lt;KafkaPartitionSplit&gt; snapshotState(long checkpointId) {
+   99          List&lt;KafkaPartitionSplit&gt; splits = super.snapshotState(checkpointId);
+  100          if (!commitOffsetsOnCheckpoint) {
+  101              return splits;
+  102          }
+  103
+  104          if (splits.isEmpty() &amp;&amp; offsetsOfFinishedSplits.isEmpty()) {
+  105              offsetsToCommit.put(checkpointId, Collections.emptyMap());
+  106          } else {
+  107              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsMap =
+  108                      offsetsToCommit.computeIfAbsent(checkpointId, id -&gt; new HashMap&lt;&gt;());
+  109              // Put the offsets of the active splits.
+  110              for (KafkaPartitionSplit split : splits) {
+  111                  // If the checkpoint is triggered before the partition starting offsets
+  112                  // is retrieved, do not commit the offsets for those partitions.
+  113                  if (split.getStartingOffset() &gt;= 0) {
+  114                      offsetsMap.put(
+  115                              split.getTopicPartition(),</code></pre></details>
+<details class="code" id="f-offsetcommit"><summary>f-offsetcommit · KafkaSourceReader.java:149</summary><p>The connector explicitly states that an external offset-commit failure does not break recovery correctness.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java#L149">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReader.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  147                          committedPartitions,
+  148                          (ignored, e) -&gt; {
+  149                              // The offset commit here is needed by the external monitoring. It won't
+  150                              // break Flink job's correctness if we fail to commit the offset here.
+  151                              if (e != null) {
+  152                                  kafkaSourceReaderMetrics.recordFailedCommit();
+  153                                  LOG.warn(
+  154                                          &quot;Failed to commit consumer offsets for checkpoint {}&quot;,
+  155                                          checkpointId,
+  156                                          e);
+  157                              } else {
+  158                                  LOG.debug(
+  159                                          &quot;Successfully committed offsets for checkpoint {}&quot;,
+  160                                          checkpointId);
+  161                                  kafkaSourceReaderMetrics.recordSucceededCommit();
+  162                                  // If the finished topic partition has been committed, we remove it
+  163                                  // from the offsets of the finished splits map.
+  164                                  committedPartitions.forEach(
+  165                                          (tp, offset) -&gt;
+  166                                                  kafkaSourceReaderMetrics.recordCommittedOffset(</code></pre></details>
+<details class="code" id="f-fetchcommit"><summary>f-fetchcommit · KafkaSourceFetcherManager.java:75</summary><p>Offset commit work is enqueued to a split fetcher.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java#L75">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/source/reader/fetcher/KafkaSourceFetcherManager.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>   73      }
+   74
+   75      public void commitOffsets(
+   76              Map&lt;TopicPartition, OffsetAndMetadata&gt; offsetsToCommit, OffsetCommitCallback callback) {
+   77          LOG.debug(&quot;Committing offsets {}&quot;, offsetsToCommit);
+   78          if (offsetsToCommit.isEmpty()) {
+   79              return;
+   80          }
+   81          SplitFetcher&lt;ConsumerRecord&lt;byte[], byte[]&gt;, KafkaPartitionSplit&gt; splitFetcher =
+   82                  fetchers.get(0);
+   83          if (splitFetcher != null) {
+   84              // The fetcher thread is still running. This should be the majority of the cases.
+   85              enqueueOffsetsCommitTask(splitFetcher, offsetsToCommit, callback);
+   86          } else {
+   87              splitFetcher = createSplitFetcher();
+   88              enqueueOffsetsCommitTask(splitFetcher, offsetsToCommit, callback);
+   89              startFetcher(splitFetcher);
+   90          }
+   91      }
+   92  </code></pre></details>
+<details class="code" id="f-base"><summary>f-base · SourceReaderBase.java:177</summary><p>Source reader emits fetched records on the task thread.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-connectors/flink-connector-base/src/main/java/org/apache/flink/connector/base/source/reader/SourceReaderBase.java#L177">flink/flink-connectors/flink-connector-base/src/main/java/org/apache/flink/connector/base/source/reader/SourceReaderBase.java</a> · 07805482705f</p><pre class="guide-pre"><code>  175
+  176      @Override
+  177      public InputStatus pollNext(ReaderOutput&lt;T&gt; output) throws Exception {
+  178          // make sure we have a fetch we are working on, or move to the next
+  179          RecordsWithSplitIds&lt;E&gt; recordsWithSplitId = this.currentFetch;
+  180          if (recordsWithSplitId == null) {
+  181              recordsWithSplitId = getNextFetch(output);
+  182              if (recordsWithSplitId == null) {
+  183                  return trace(finishedOrAvailableLater());
+  184              }
+  185          }
+  186          if (rateLimitingEnabled) {
+  187              return pollNextWithRateLimiting(recordsWithSplitId, output);
+  188          } else {
+  189              return pollNextWithoutRateLimiting(recordsWithSplitId, output);
+  190          }
+  191      }
+  192
+  193      private InputStatus pollNextWithoutRateLimiting(
+  194              RecordsWithSplitIds&lt;E&gt; recordsWithSplitId, ReaderOutput&lt;T&gt; output) throws Exception {</code></pre></details>
+<details class="code" id="f-chain"><summary>f-chain · ChainingOutput.java:101</summary><p>Chained output invokes the next operator in-process.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/ChainingOutput.java#L101">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/ChainingOutput.java</a> · 07805482705f</p><pre class="guide-pre"><code>   99      }
+  100
+  101      protected &lt;X&gt; void pushToOperator(StreamRecord&lt;X&gt; record) {
+  102          try {
+  103              // we know that the given outputTag matches our OutputTag so the record
+  104              // must be of the type that our operator expects.
+  105              @SuppressWarnings(&quot;unchecked&quot;)
+  106              StreamRecord&lt;T&gt; castRecord = (StreamRecord&lt;T&gt;) record;
+  107
+  108              numRecordsOut.inc();
+  109              numRecordsIn.inc();
+  110              recordProcessor.accept(castRecord);
+  111          } catch (Exception e) {
+  112              throw new ExceptionInChainedOperatorException(e);
+  113          }
+  114      }
+  115
+  116      @Override
+  117      public void emitWatermark(Watermark mark) {
+  118          if (announcedStatus.isIdle()) {</code></pre></details>
+<details class="code" id="f-map"><summary>f-map · StreamMap.java:36</summary><p>Map calls the user function and emits its result.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/api/operators/StreamMap.java#L36">flink/flink-runtime/src/main/java/org/apache/flink/streaming/api/operators/StreamMap.java</a> · 07805482705f</p><pre class="guide-pre"><code>   34
+   35      @Override
+   36      public void processElement(StreamRecord&lt;IN&gt; element) throws Exception {
+   37          output.collect(element.replace(userFunction.map(element.getValue())));
+   38      }
+   39  }
+   40  </code></pre></details>
+<details class="code" id="f-remote"><summary>f-remote · RemoteInputChannel.java:387</summary><p>Remote data channels request subpartitions from a TaskManager peer.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/io/network/partition/consumer/RemoteInputChannel.java#L387">flink/flink-runtime/src/main/java/org/apache/flink/runtime/io/network/partition/consumer/RemoteInputChannel.java</a> · 07805482705f</p><pre class="guide-pre"><code>  385      @VisibleForTesting
+  386      @Override
+  387      public void requestSubpartitions() throws IOException, InterruptedException {
+  388          if (partitionRequestClient == null) {
+  389              LOG.debug(
+  390                      &quot;{}: Requesting REMOTE subpartitions {} of partition {}. {}&quot;,
+  391                      this,
+  392                      consumedSubpartitionIndexSet,
+  393                      partitionId,
+  394                      channelStatePersister);
+  395              // Create a client and request the partition
+  396              try {
+  397                  partitionRequestClient =
+  398                          connectionManager.createPartitionRequestClient(connectionId);
+  399              } catch (IOException e) {
+  400                  // IOExceptions indicate that we could not open a connection to the remote
+  401                  // TaskExecutor
+  402                  throw new PartitionConnectionException(partitionId, e);
+  403              }
+  404  </code></pre></details>
+<details class="code" id="f-local"><summary>f-local · LocalInputChannel.java:429</summary><p>Co-located tasks use local input channels, not a TCP request for each record.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/io/network/partition/consumer/LocalInputChannel.java#L429">flink/flink-runtime/src/main/java/org/apache/flink/runtime/io/network/partition/consumer/LocalInputChannel.java</a> · 07805482705f</p><pre class="guide-pre"><code>  427
+  428      @Override
+  429      protected void requestSubpartitions() throws IOException {
+  430          checkState(toBeConsumedBuffers.isEmpty());
+  431
+  432          boolean retriggerRequest = false;
+  433          boolean notifyDataAvailable = false;
+  434
+  435          // The lock is required to request only once in the presence of retriggered requests.
+  436          synchronized (requestLock) {
+  437              checkState(!isReleased, &quot;LocalInputChannel has been released already&quot;);
+  438
+  439              if (subpartitionView == null) {
+  440                  LOG.debug(
+  441                          &quot;{}: Requesting LOCAL subpartitions {} of partition {}. {}&quot;,
+  442                          this,
+  443                          consumedSubpartitionIndexSet,
+  444                          partitionId,
+  445                          channelStatePersister);
+  446  </code></pre></details>
+<details class="code" id="f-taskrpc"><summary>f-taskrpc · TaskExecutorGateway.java:147</summary><p>Trigger RPC completion acknowledges initiation, not durable snapshot completion.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/taskexecutor/TaskExecutorGateway.java#L147">flink/flink-runtime/src/main/java/org/apache/flink/runtime/taskexecutor/TaskExecutorGateway.java</a> · 07805482705f</p><pre class="guide-pre"><code>  145       * @return Future acknowledge if the checkpoint has been successfully triggered
+  146       */
+  147      CompletableFuture&lt;Acknowledge&gt; triggerCheckpoint(
+  148              ExecutionAttemptID executionAttemptID,
+  149              long checkpointID,
+  150              long checkpointTimestamp,
+  151              CheckpointOptions checkpointOptions);
+  152
+  153      /**
+  154       * Confirm a checkpoint for the given task. The checkpoint is identified by the checkpoint ID
+  155       * and the checkpoint timestamp.
+  156       *
+  157       * @param executionAttemptID identifying the task
+  158       * @param completedCheckpointId unique id for the completed checkpoint
+  159       * @param completedCheckpointTimestamp is the timestamp when the checkpoint has been initiated
+  160       * @param lastSubsumedCheckpointId unique id for the checkpoint to be subsumed
+  161       * @return Future acknowledge if the checkpoint has been successfully confirmed
+  162       */
+  163      CompletableFuture&lt;Acknowledge&gt; confirmCheckpoint(
+  164              ExecutionAttemptID executionAttemptID,</code></pre></details>
+<details class="code" id="f-ackrpc"><summary>f-ackrpc · CheckpointCoordinatorGateway.java:35</summary><p>Durable checkpoint ACK carries attempt ID, checkpoint ID, metrics and task state handles.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinatorGateway.java#L35">flink/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinatorGateway.java</a> · 07805482705f</p><pre class="guide-pre"><code>   33  public interface CheckpointCoordinatorGateway extends RpcGateway {
+   34
+   35      CompletableFuture&lt;Acknowledge&gt; acknowledgeCheckpoint(
+   36              final JobID jobID,
+   37              final ExecutionAttemptID executionAttemptID,
+   38              final long checkpointId,
+   39              final CheckpointMetrics checkpointMetrics,
+   40              @Nullable final SerializedValue&lt;TaskStateSnapshot&gt; subtaskState);
+   41
+   42      void declineCheckpoint(DeclineCheckpoint declineCheckpoint);
+   43
+   44      void reportCheckpointMetrics(
+   45              JobID jobID,
+   46              ExecutionAttemptID executionAttemptID,
+   47              long checkpointId,
+   48              CheckpointMetrics checkpointMetrics);
+   49
+   50      void reportInitializationMetrics(
+   51              JobID jobId,
+   52              ExecutionAttemptID executionAttemptId,</code></pre></details>
+<details class="code" id="f-barrier"><summary>f-barrier · SubtaskCheckpointCoordinatorImpl.java:351</summary><p>Pre-barrier hooks precede barrier broadcast and snapshot finalization.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/SubtaskCheckpointCoordinatorImpl.java#L351">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/SubtaskCheckpointCoordinatorImpl.java</a> · 07805482705f</p><pre class="guide-pre"><code>  349          // Step (1): Prepare the checkpoint, allow operators to do some pre-barrier work.
+  350          //           The pre-barrier work should be nothing or minimal in the common case.
+  351          operatorChain.prepareSnapshotPreBarrier(metadata.getCheckpointId());
+  352
+  353          // Step (2): Send the checkpoint barrier downstream
+  354          LOG.debug(
+  355                  &quot;Task {} broadcastEvent at {}, triggerTime {}, passed time {}&quot;,
+  356                  taskName,
+  357                  System.currentTimeMillis(),
+  358                  metadata.getTimestamp(),
+  359                  System.currentTimeMillis() - metadata.getTimestamp());
+  360          CheckpointBarrier checkpointBarrier =
+  361                  new CheckpointBarrier(metadata.getCheckpointId(), metadata.getTimestamp(), options);
+  362          operatorChain.broadcastEvent(checkpointBarrier, options.isUnalignedCheckpoint());
+  363
+  364          // Step (3): Register alignment timer to timeout aligned barrier to unaligned barrier
+  365          registerAlignmentTimer(metadata.getCheckpointId(), operatorChain, checkpointBarrier);
+  366
+  367          // Step (4): Prepare to spill the in-flight buffers for input and output
+  368          if (options.needsChannelState()) {</code></pre></details>
+<details class="code" id="f-async"><summary>f-async · AsyncCheckpointRunnable.java:109</summary><p>Snapshot futures are finalized asynchronously before reporting completed state.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/AsyncCheckpointRunnable.java#L109">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/tasks/AsyncCheckpointRunnable.java</a> · 07805482705f</p><pre class="guide-pre"><code>  107
+  108      @Override
+  109      public void run() {
+  110          final long asyncStartNanos = System.nanoTime();
+  111          final long asyncStartDelayMillis = (asyncStartNanos - asyncConstructionNanos) / 1_000_000L;
+  112          LOG.debug(
+  113                  &quot;{} - started executing asynchronous part of checkpoint {}. Asynchronous start delay: {} ms&quot;,
+  114                  taskName,
+  115                  checkpointMetaData.getCheckpointId(),
+  116                  asyncStartDelayMillis);
+  117
+  118          FileSystemSafetyNet.initializeSafetyNetForThread();
+  119          try {
+  120
+  121              SnapshotsFinalizeResult snapshotsFinalizeResult =
+  122                      isTaskDeployedAsFinished
+  123                              ? finalizedFinishedSnapshots()
+  124                              : finalizeNonFinishedSnapshots();
+  125
+  126              final long asyncEndNanos = System.nanoTime();</code></pre></details>
+<details class="code" id="f-complete"><summary>f-complete · CheckpointCoordinator.java:1360</summary><p>Coordinator completes pending checkpoints after required state acknowledgements.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java#L1360">flink/flink-runtime/src/main/java/org/apache/flink/runtime/checkpoint/CheckpointCoordinator.java</a> · 07805482705f</p><pre class="guide-pre"><code> 1358       * @throws CheckpointException if the completion failed
+ 1359       */
+ 1360      private void completePendingCheckpoint(PendingCheckpoint pendingCheckpoint)
+ 1361              throws CheckpointException {
+ 1362          final long checkpointId = pendingCheckpoint.getCheckpointID();
+ 1363          final CompletedCheckpoint completedCheckpoint;
+ 1364          final CompletedCheckpoint lastSubsumed;
+ 1365          final CheckpointProperties props = pendingCheckpoint.getProps();
+ 1366
+ 1367          completedCheckpointStore.getSharedStateRegistry().checkpointCompleted(checkpointId);
+ 1368
+ 1369          try {
+ 1370              completedCheckpoint = finalizeCheckpoint(pendingCheckpoint);
+ 1371
+ 1372              // the pending checkpoint must be discarded after the finalization
+ 1373              Preconditions.checkState(pendingCheckpoint.isDisposed() &amp;&amp; completedCheckpoint != null);
+ 1374
+ 1375              if (!props.isSavepoint()) {
+ 1376                  lastSubsumed =
+ 1377                          addCompletedCheckpointToStoreAndSubsumeOldest(</code></pre></details>
+<details class="code" id="f-sinkop"><summary>f-sinkop · SinkWriterOperator.java:188</summary><p>Sink writer flushes and emits committables at the checkpoint boundary.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/operators/sink/SinkWriterOperator.java#L188">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/operators/sink/SinkWriterOperator.java</a> · 07805482705f</p><pre class="guide-pre"><code>  186
+  187      @Override
+  188      public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
+  189          super.prepareSnapshotPreBarrier(checkpointId);
+  190          if (!endOfInput) {
+  191              sinkWriter.flush(false);
+  192              emitCommittables(checkpointId);
+  193          }
+  194          // no records are expected to emit after endOfInput
+  195      }
+  196
+  197      @Override
+  198      public void processWatermark(Watermark mark) throws Exception {
+  199          super.processWatermark(mark);
+  200          this.currentWatermark = mark.getTimestamp();
+  201          sinkWriter.writeWatermark(
+  202                  new org.apache.flink.api.common.eventtime.Watermark(mark.getTimestamp()));
+  203      }
+  204
+  205      @Override</code></pre></details>
+<details class="code" id="f-writer"><summary>f-writer · KafkaWriter.java:170</summary><p>Mailbox-side write serializes and sends using KafkaProducer; callbacks are asynchronous.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/KafkaWriter.java#L170">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/KafkaWriter.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  168
+  169      @Override
+  170      public void write(@Nullable IN element, Context context) throws IOException {
+  171          checkAsyncException();
+  172          final ProducerRecord&lt;byte[], byte[]&gt; record =
+  173                  recordSerializer.serialize(element, kafkaSinkContext, context.timestamp());
+  174          if (record != null) {
+  175              currentProducer.send(record, deliveryCallback);
+  176              numRecordsOutCounter.inc();
+  177          }
+  178      }
+  179
+  180      @Override
+  181      public void flush(boolean endOfInput) throws IOException, InterruptedException {
+  182          if (deliveryGuarantee != DeliveryGuarantee.NONE || endOfInput) {
+  183              LOG.debug(&quot;final flush={}&quot;, endOfInput);
+  184              currentProducer.flush();
+  185          }
+  186
+  187          checkAsyncException();</code></pre></details>
+<details class="code" id="f-prepare"><summary>f-prepare · ExactlyOnceKafkaWriter.java:221</summary><p>Exactly-once writer emits transaction committables and tracks ongoing transactions in writer state.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/ExactlyOnceKafkaWriter.java#L221">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/ExactlyOnceKafkaWriter.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  219
+  220      @Override
+  221      public Collection&lt;KafkaCommittable&gt; prepareCommit() {
+  222          // only return a KafkaCommittable if the current transaction has been written some data
+  223          if (currentProducer.hasRecordsInTransaction()) {
+  224              KafkaCommittable committable = KafkaCommittable.of(currentProducer);
+  225              LOG.debug(&quot;Prepare {}.&quot;, committable);
+  226              currentProducer.precommitTransaction();
+  227              return Collections.singletonList(committable);
+  228          }
+  229
+  230          // otherwise, we recycle the producer (the pool will reset the transaction state)
+  231          producerPool.recycle(currentProducer);
+  232          return Collections.emptyList();
+  233      }
+  234
+  235      @Override
+  236      public List&lt;KafkaWriterState&gt; snapshotState(long checkpointId) throws IOException {
+  237          // recycle committed producers
+  238          TransactionFinished finishedTransaction;</code></pre></details>
+<details class="code" id="f-committerop"><summary>f-committerop · CommitterOperator.java:159</summary><p>Committer commits eligible checkpoint committables on completion; restored committables are retried.</p><p class="path"><a href="https://github.com/apache/flink/blob/07805482705f4b703cd19517ecedf12014b7b762/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/operators/sink/CommitterOperator.java#L159">flink/flink-runtime/src/main/java/org/apache/flink/streaming/runtime/operators/sink/CommitterOperator.java</a> · 07805482705f</p><pre class="guide-pre"><code>  157
+  158      @Override
+  159      public void notifyCheckpointComplete(long checkpointId) throws Exception {
+  160          super.notifyCheckpointComplete(checkpointId);
+  161          commitAndEmitCheckpoints(Math.max(lastCompletedCheckpointId, checkpointId));
+  162      }
+  163
+  164      private void commitAndEmitCheckpoints(long checkpointId)
+  165              throws IOException, InterruptedException {
+  166          lastCompletedCheckpointId = checkpointId;
+  167          for (CheckpointCommittableManager&lt;CommT&gt; checkpointManager :
+  168                  committableCollector.getCheckpointCommittablesUpTo(checkpointId)) {
+  169              // ensure that all committables of the first checkpoint are fully committed before
+  170              // attempting the next committable
+  171              commitAndEmit(checkpointManager);
+  172              committableCollector.remove(checkpointManager);
+  173          }
+  174      }
+  175
+  176      private void commitAndEmit(CheckpointCommittableManager&lt;CommT&gt; committableManager)</code></pre></details>
+<details class="code" id="f-commit"><summary>f-commit · KafkaCommitter.java:103</summary><p>Committer retries retriable errors but distinguishes fencing/invalid state/fatal errors.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java#L103">flink-connector-kafka/flink-connector-kafka/src/main/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitter.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  101              try {
+  102                  producer = writerProducer.orElseGet(() -&gt; getProducer(committable));
+  103                  producer.commitTransaction();
+  104                  backchannel.send(TransactionFinished.successful(committable.getTransactionalId()));
+  105              } catch (RetriableException e) {
+  106                  LOG.warn(
+  107                          &quot;Encountered retriable exception while committing {}.&quot;, transactionalId, e);
+  108                  request.retryLater();
+  109              } catch (ProducerFencedException e) {
+  110                  logFencedRequest(request, e);
+  111                  handleFailedTransaction(producer);
+  112                  request.signalFailedWithKnownReason(e);
+  113              } catch (InvalidTxnStateException e) {
+  114                  // This exception only occurs when aborting after a commit or vice versa.
+  115                  // It does not appear on double commits or double aborts.
+  116                  LOG.error(
+  117                          &quot;Unable to commit transaction ({}) because it's in an invalid state. &quot;
+  118                                  + &quot;Most likely the transaction has been aborted for some reason. Please check the Kafka logs for more details.&quot;,
+  119                          request,
+  120                          e);</code></pre></details>
+<details class="code" id="t-schema"><summary>t-schema · RequestResponseTest.java:472</summary><p>Protocol serialization/version tests inspected; not executed for these notes.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/clients/src/test/java/org/apache/kafka/common/requests/RequestResponseTest.java#L472">Kafka/clients/src/test/java/org/apache/kafka/common/requests/RequestResponseTest.java</a> · d2da6a18f839</p><pre class="guide-pre"><code>  470
+  471      @Test
+  472      public void testApiVersionsSerialization() {
+  473          for (short version : API_VERSIONS.allVersions()) {
+  474              checkErrorResponse(createApiVersionRequest(version), new UnsupportedVersionException(&quot;Not Supported&quot;));
+  475              checkResponse(TestUtils.defaultApiVersionsResponse(ApiMessageType.ListenerType.BROKER), version);
+  476          }
+  477      }
+  478
+  479      @Test
+  480      public void testBatchedFindCoordinatorRequestSerialization() {
+  481          for (short version : FIND_COORDINATOR.allVersions()) {
+  482              checkRequest(createBatchedFindCoordinatorRequest(singletonList(&quot;group1&quot;), version));
+  483              if (version &lt; FindCoordinatorRequest.MIN_BATCHED_VERSION) {
+  484                  assertThrows(NoBatchedFindCoordinatorsException.class, () -&gt;
+  485                          createBatchedFindCoordinatorRequest(asList(&quot;group1&quot;, &quot;group2&quot;), version));
+  486              } else {
+  487                  checkRequest(createBatchedFindCoordinatorRequest(asList(&quot;group1&quot;, &quot;group2&quot;), version));
+  488              }
+  489          }</code></pre></details>
+<details class="code" id="t-isr"><summary>t-isr · PartitionTest.scala:2230</summary><p>High-watermark/minimum-ISR test located and inspected; not executed.</p><p class="path"><a href="https://github.com/apache/kafka/blob/d2da6a18f839ce8b2eeb4db8e7515200258b0f81/core/src/test/scala/unit/kafka/cluster/PartitionTest.scala#L2230">Kafka/core/src/test/scala/unit/kafka/cluster/PartitionTest.scala</a> · d2da6a18f839</p><pre class="guide-pre"><code> 2228
+ 2229    @Test
+ 2230    def testHighWatermarkAdvanceShouldNotAdvanceWhenUnderMinISR(): Unit = {
+ 2231      configRepository.setTopicConfig(topicPartition.topic, TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, &quot;3&quot;)
+ 2232      val log = logManager.getOrCreateLog(topicPartition, topicId.toJava)
+ 2233      seedLogData(log, numRecords = 10, leaderEpoch = 4)
+ 2234
+ 2235      val leaderEpoch = 5
+ 2236      val remoteBrokerId1 = brokerId + 1
+ 2237      val remoteBrokerId2 = brokerId + 2
+ 2238      val replicas = Array(brokerId, remoteBrokerId1, remoteBrokerId2)
+ 2239      val isr = Array(brokerId, remoteBrokerId1)
+ 2240
+ 2241      addBrokerEpochToMockMetadataCache(metadataCache, replicas)
+ 2242
+ 2243      val partition = new Partition(
+ 2244        topicPartition,
+ 2245        replicaLagTimeMaxMs = ReplicationConfigs.REPLICA_LAG_TIME_MAX_MS_DEFAULT,
+ 2246        localBrokerId = brokerId,
+ 2247        () =&gt; defaultBrokerEpoch(brokerId),</code></pre></details>
+<details class="code" id="t-offset"><summary>t-offset · KafkaSourceReaderTest.java:219</summary><p>Test snapshots records, completes checkpoint, then checks external committed offsets.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L219">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  217
+  218      @Test
+  219      void testOffsetCommitOnCheckpointComplete() throws Exception {
+  220          final String groupId = &quot;testOffsetCommitOnCheckpointComplete&quot;;
+  221          try (KafkaSourceReader&lt;Integer&gt; reader =
+  222                  (KafkaSourceReader&lt;Integer&gt;)
+  223                          createReader(Boundedness.CONTINUOUS_UNBOUNDED, groupId)) {
+  224              reader.addSplits(
+  225                      getSplits(numSplits, NUM_RECORDS_PER_SPLIT, Boundedness.CONTINUOUS_UNBOUNDED));
+  226              ValidatingSourceOutput output = new ValidatingSourceOutput();
+  227              long checkpointId = 0;
+  228              do {
+  229                  checkpointId++;
+  230                  reader.pollNext(output);
+  231                  // Create a checkpoint for each message consumption, but not complete them.
+  232                  reader.snapshotState(checkpointId);
+  233              } while (output.count() &lt; totalNumRecords);
+  234
+  235              // The completion of the last checkpoint should subsume all the previous checkpoitns.
+  236              assertThat(reader.getOffsetsToCommit()).hasSize((int) checkpointId);</code></pre></details>
+<details class="code" id="t-disabled"><summary>t-disabled · KafkaSourceReaderTest.java:284</summary><p>Test reads and snapshots while Kafka offset committing is disabled.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java#L284">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/source/reader/KafkaSourceReaderTest.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  282
+  283      @Test
+  284      void testDisableOffsetCommit() throws Exception {
+  285          final Properties properties = new Properties();
+  286          properties.setProperty(KafkaSourceOptions.COMMIT_OFFSETS_ON_CHECKPOINT.key(), &quot;false&quot;);
+  287          try (KafkaSourceReader&lt;Integer&gt; reader =
+  288                  (KafkaSourceReader&lt;Integer&gt;)
+  289                          createReader(
+  290                                  Boundedness.CONTINUOUS_UNBOUNDED,
+  291                                  new TestingReaderContext(),
+  292                                  (ignore) -&gt; {},
+  293                                  properties,
+  294                                  null)) {
+  295              reader.addSplits(
+  296                      getSplits(numSplits, NUM_RECORDS_PER_SPLIT, Boundedness.CONTINUOUS_UNBOUNDED));
+  297              ValidatingSourceOutput output = new ValidatingSourceOutput();
+  298              long checkpointId = 0;
+  299              do {
+  300                  checkpointId++;
+  301                  reader.pollNext(output);</code></pre></details>
+<details class="code" id="t-recovery"><summary>t-recovery · KafkaSinkITCase.java:287</summary><p>Recovery cases include chained and unchained sinks; concurrent-checkpoint case follows.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/KafkaSinkITCase.java#L287">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/KafkaSinkITCase.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>  285      @ParameterizedTest(name = &quot;{0}, chained={1}&quot;)
+  286      @MethodSource(&quot;getEOSParameters&quot;)
+  287      public void testRecoveryWithExactlyOnceGuarantee(
+  288              TransactionNamingStrategy namingStrategy, boolean chained) throws Exception {
+  289          testRecoveryWithAssertion(DeliveryGuarantee.EXACTLY_ONCE, 1, namingStrategy, chained);
+  290      }
+  291
+  292      @ParameterizedTest(name = &quot;{0}, chained={1}&quot;)
+  293      @MethodSource(&quot;getEOSParameters&quot;)
+  294      public void testRecoveryWithExactlyOnceGuaranteeAndConcurrentCheckpoints(
+  295              TransactionNamingStrategy namingStrategy, boolean chained) throws Exception {
+  296          testRecoveryWithAssertion(DeliveryGuarantee.EXACTLY_ONCE, 2, namingStrategy, chained);
+  297      }
+  298
+  299      @ParameterizedTest(name = &quot;{0}, chained={1}&quot;)
+  300      @MethodSource(&quot;getEOSParameters&quot;)
+  301      public void testAbortTransactionsOfPendingCheckpointsAfterFailure(
+  302              TransactionNamingStrategy namingStrategy,
+  303              boolean chained,
+  304              @TempDir File checkpointDir,</code></pre></details>
+<details class="code" id="t-retry"><summary>t-retry · KafkaCommitterTest.java:71</summary><p>Committer test asserts retry on retriable failure; adjacent tests cover fatal and fenced errors.</p><p class="path"><a href="https://github.com/apache/flink-connector-kafka/blob/ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitterTest.java#L71">flink-connector-kafka/flink-connector-kafka/src/test/java/org/apache/flink/connector/kafka/sink/internal/KafkaCommitterTest.java</a> · ae656dd6fe23</p><pre class="guide-pre"><code>   69      /** Causes a network error by inactive broker and tests that a retry will happen. */
+   70      @Test
+   71      public void testRetryCommittableOnRetriableError() throws IOException, InterruptedException {
+   72          Properties properties = getProperties();
+   73          try (final KafkaCommitter committer =
+   74                          new KafkaCommitter(
+   75                                  properties, TRANS_ID, SUB_ID, ATTEMPT, false, MOCK_FACTORY);
+   76                  FlinkKafkaInternalProducer&lt;Object, Object&gt; producer =
+   77                          new FlinkKafkaInternalProducer&lt;&gt;(properties, TRANS_ID);
+   78                  ReadableBackchannel&lt;TransactionFinished&gt; backchannel =
+   79                          BackchannelFactory.getInstance()
+   80                                  .getReadableBackchannel(SUB_ID, ATTEMPT, TRANS_ID)) {
+   81              final MockCommitRequest&lt;KafkaCommittable&gt; request =
+   82                      new MockCommitRequest&lt;&gt;(KafkaCommittable.of(producer));
+   83
+   84              producer.resumeTransaction(PRODUCER_ID, EPOCH);
+   85              committer.commit(Collections.singletonList(request));
+   86
+   87              assertThat(request.getNumberOfRetries()).isEqualTo(1);
+   88              assertThat(backchannel).doesNotHave(transactionFinished(true));</code></pre></details></section>
+<section id="mental-model"><h2>14. Presentation mental model: five questions and three planes</h2>
+      <figure class="diagram" id="rpc-mental-model"><figcaption><h3>Remember: owner → thread → message → durable fact → visibility</h3><p>Ask these five questions for every arrow. An acknowledgement has meaning only when you know which boundary it acknowledges.</p></figcaption><div class="diagram-tools"><button data-zoom="in" aria-label="Zoom in diagram">Zoom +</button><button data-zoom="out" aria-label="Zoom out diagram">Zoom −</button><button data-zoom="fit">Fit width</button><button data-zoom="actual">Actual size</button><a href="diagrams/rpc-mental-model.svg" target="_blank">Full-size SVG</a><a href="diagrams/rpc-mental-model.mmd">Mermaid source</a><span class="diagram-hint">Text stays readable. Scroll or open the full-size diagram.</span></div><div class="diagram-scroll" tabindex="0" aria-label="Scrollable diagram: Remember: owner → thread → message → durable fact → visibility"><img src="diagrams/rpc-mental-model.svg" alt="Remember: owner → thread → message → durable fact → visibility. Ask these five questions for every arrow. An acknowledgement has meaning only when you know which boundary it acknowledges." loading="lazy"></div></figure>
+      <div class="table-scroll"><table><thead><tr><th>Remember</th><th>Say this during the presentation</th></tr></thead><tbody><tr><td>Three planes</td><td>Data plane moves records; control plane assigns ownership and initiates checkpoints; durability plane stores logs/checkpoints/decisions.</td></tr><tr><td>Three Flink boundaries</td><td>Same chain: function call. Different task, same worker: local buffered channel. Different workers: network data channel. Control RPC is separate.</td></tr><tr><td>Three Kafka owners</td><td>Partition leader owns a log; group coordinator owns group progress; transaction coordinator owns transaction decisions. They can be different brokers or coexist in one process.</td></tr><tr><td>Three milestones</td><td>Produced is not replicated; replicated is not transactionally visible; visible is not downstream processing completed.</td></tr><tr><td>Two offset homes</td><td>Flink checkpoint offset is the recovery bookmark. Kafka group offset is external group progress; in ordinary KafkaSource its post-checkpoint commit is bookkeeping.</td></tr><tr><td>One failure question</td><td>If this process disappears now, what durable fact tells its replacement what to replay and what not to publish twice?</td></tr></tbody></table></div>
+      <details class="qa"><summary>A 90-second closing script</summary><p>“Kafka is a set of partitioned replicated logs. Clients discover owners and speak a versioned batched protocol directly to those owners. A broker contains many threads and coordinator components; it is not one pod per RPC.</p><p>Flink embeds Kafka clients inside its TaskManagers. The source fetcher talks to Kafka, the task mailbox emits and transforms records, and the sink’s producer sends output. Chained operators call each other locally; only task boundaries introduce buffered data exchange.</p><p>The checkpoint stores a consistent recovery bookmark: source positions, operator state and sink intent. After completion, the sink resolves its transaction. Kafka’s decision and markers control when readers see it. If a process dies, replay is normal; the protocol prevents replay from becoming duplicate committed effects.</p><p>For every diagram arrow, ask: who owns it, which thread runs it, what message crosses the boundary, what durable fact survives, and when does the result become visible?”</p></details>
+      <p>Fast lookup for audience questions: <a href="kafka-rpc-atlas.html#rpc-0">Produce</a> · <a href="kafka-rpc-atlas.html#rpc-1">Fetch</a> · <a href="kafka-rpc-atlas.html#rpc-10">FindCoordinator</a> · <a href="kafka-rpc-atlas.html#rpc-26">EndTxn</a> · <a href="kafka-rpc-atlas.html#rpc-27">WriteTxnMarkers</a> · <a href="kafka-rpc-atlas.html#rpc-8">OffsetCommit</a>.</p></section><footer><a href="index.html">Field guide home</a><a href="kafka-rpc-atlas.html">Open the complete Kafka RPC atlas</a></footer></main></div></body></html>

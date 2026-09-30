@@ -1,0 +1,46 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","nodeSpacing":48,"rankSpacing":65,"htmlLabels":false,"padding":22}}}%%
+flowchart TB
+
+subgraph KAFKA["Kafka cluster — multiple processes / pods"]
+ QC["KRaft controller quorum
+metadata log"]
+ B1["Broker A
+input P0 leader"]
+ B2["Broker B
+output P0 leader"]
+ BR["Other broker replicas
+independent volumes"]
+end
+subgraph FLINK["Flink cluster"]
+ JM["JobManager pod
+JobMaster + SourceCoordinator"]
+ T1["TaskManager pod A
+KafkaSource + parse chain"]
+ T2["TaskManager pod B
+keyed transform + KafkaSink"]
+end
+subgraph DURABLE["Independent durable storage"]
+ CP[("Checkpoint object storage")]
+end
+B1 -->|"Fetch response batches"| T1
+T1 -->|"keyBy: Flink data channel"| T2
+T2 -->|"Produce request batches"| B2
+BR -->|"replica Fetch"| B1
+BR -->|"replica Fetch"| B2
+JM -. "deploy / checkpoint RPCs" .-> T1
+JM -. "deploy / checkpoint RPCs" .-> T2
+T1 --> CP
+T2 --> CP
+QC -. "metadata replicated to brokers" .-> B1
+QC -. "metadata replicated to brokers" .-> B2
+class B1,B2,BR,QC,CP store
+class JM control
+class T1,T2 worker
+
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12
+linkStyle default stroke:#64748b,stroke-width:1.7px,stroke-linecap:round

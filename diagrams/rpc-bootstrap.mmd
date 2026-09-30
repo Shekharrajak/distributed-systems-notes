@@ -1,0 +1,22 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":35,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":170}}}%%
+sequenceDiagram
+
+box rgb(255,237,213) Client process
+participant C as Kafka client
+end
+box rgb(241,245,249) Kafka broker processes
+participant S as Bootstrap broker
+participant L as Partition leader
+participant G as Coordinator broker
+end
+C->>S: Connect + ApiVersions
+S-->>C: Supported API version ranges
+C->>S: Metadata for input/output topics
+S-->>C: Partition leaders + advertised endpoints
+C->>L: Produce or Fetch at selected version
+L-->>C: Per-partition data / result / error
+C->>S: FindCoordinator keyed by ID/type
+S-->>C: Coordinator node endpoint
+C->>G: OffsetCommit or EndTxn
+G-->>C: Coordinator result
+Note over C,G: No load balancer hop per record after metadata routing

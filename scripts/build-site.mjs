@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 const repositories=new Set(['Kafka','flink','flink-connector-kafka','spark','iceberg','datafusion','datafusion-iceberg','datafusion-comet','arrow-rs']);
 export function isSiteFile(file){
   return /^[^/]+\.(?:html|css|js|woff2)$/.test(file)
-    || ['diagrams.md','validation.json','validation.md','Ubuntu-LICENSE.txt'].includes(file)
+    || ['diagrams.md','validation.json','validation.md','Ubuntu-LICENSE.txt','kafka-rpc-schemas.json','kafka-guide-validation.json'].includes(file)
     || /^diagrams\/[^/]+\.(?:svg|mmd)$/.test(file)
     || /^stream-processing\/distributed-streaming-systems-guide\/[^/]+\.html$/.test(file);
 }

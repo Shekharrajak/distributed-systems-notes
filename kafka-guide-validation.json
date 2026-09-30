@@ -1,0 +1,512 @@
+{
+  "sourceRevisions": {
+    "Kafka": "d2da6a18f839ce8b2eeb4db8e7515200258b0f81",
+    "flink": "07805482705f4b703cd19517ecedf12014b7b762",
+    "flink-connector-kafka": "ae656dd6fe23f19f2e7e79cacd2d5e0341f3706b"
+  },
+  "apiPairs": 94,
+  "active": 90,
+  "retired": 4,
+  "headers": 2,
+  "sourceAnchors": 45,
+  "newPages": [
+    "kafka-flink-distributed-runtime.html",
+    "kafka-rpc-atlas.html"
+  ],
+  "diagrams": [
+    "rpc-placement",
+    "rpc-locality",
+    "rpc-bootstrap",
+    "rpc-broker-threads",
+    "rpc-produce-replicate",
+    "rpc-source-threads",
+    "rpc-checkpoint",
+    "rpc-transaction-visibility",
+    "rpc-storage",
+    "rpc-recovery",
+    "rpc-mental-model"
+  ],
+  "engineTestsExecuted": false,
+  "runtimeObserved": false,
+  "rendered": [
+    {
+      "id": "rpc-placement",
+      "width": 1450.90234375,
+      "height": 1035.061767578125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-locality",
+      "width": 1218.71875,
+      "height": 401.2449951171875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-bootstrap",
+      "width": 931,
+      "height": 883,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-broker-threads",
+      "width": 1162.21875,
+      "height": 1224.6163330078125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-produce-replicate",
+      "width": 931,
+      "height": 1183,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-source-threads",
+      "width": 683.3515625,
+      "height": 1492.31298828125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-checkpoint",
+      "width": 974,
+      "height": 1207,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-transaction-visibility",
+      "width": 1156,
+      "height": 1047,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-storage",
+      "width": 623.05078125,
+      "height": 927.9998779296875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-recovery",
+      "width": 1184,
+      "height": 979,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    },
+    {
+      "id": "rpc-mental-model",
+      "width": 364.15625,
+      "height": 967.9999389648438,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": []
+    }
+  ],
+  "diagramGeometryPassed": true,
+  "artifactChecks": {
+    "pages": [
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "01-kafka-record-lifecycle.html"
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "01-plan-and-deploy.html"
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "02-kafka-streams.html"
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "02-records-time-and-backpressure.html"
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "03-kafka-connect.html"
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "04-flink-runtime.html"
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "05-spark-structured-streaming.html"
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "06-delivery-and-recovery.html"
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "07-code-evidence.html"
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "comet-spark-native.html"
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "datafusion-query-engine.html"
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "end-to-end-example.html"
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "flink-kafka-connector.html"
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "flink-state-checkpoint-recovery.html"
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "iceberg-storage-commits.html"
+      },
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "index.html"
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-flink-distributed-runtime.html"
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-rpc-atlas.html"
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-transactions-recovery.html"
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "rust-arrow-runtime.html"
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "spark-scheduler-networking.html"
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "01-kafka-record-lifecycle.html"
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "01-plan-and-deploy.html"
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "02-kafka-streams.html"
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "02-records-time-and-backpressure.html"
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "03-kafka-connect.html"
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "04-flink-runtime.html"
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "05-spark-structured-streaming.html"
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "06-delivery-and-recovery.html"
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "07-code-evidence.html"
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "comet-spark-native.html"
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "datafusion-query-engine.html"
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "end-to-end-example.html"
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "flink-kafka-connector.html"
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "flink-state-checkpoint-recovery.html"
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "iceberg-storage-commits.html"
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "index.html"
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-flink-distributed-runtime.html"
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-rpc-atlas.html"
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "kafka-transactions-recovery.html"
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "rust-arrow-runtime.html"
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "fontLoaded": true,
+        "activeNav": "spark-scheduler-networking.html"
+      }
+    ],
+    "errors": [],
+    "schemaSearch": true,
+    "diagramZoom": true,
+    "sourceExpansion": true,
+    "schemaCount": 94
+  },
+  "artifactChecksPassed": true
+}

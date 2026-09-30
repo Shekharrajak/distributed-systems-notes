@@ -1,0 +1,41 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","nodeSpacing":48,"rankSpacing":65,"htmlLabels":false,"padding":22}}}%%
+flowchart TB
+
+subgraph JM["JobManager process"]
+ E["KafkaSourceEnumerator
+discover and assign splits"]
+end
+subgraph IO["TaskManager — SplitFetcher I/O thread"]
+ K["Kafka partition split reader
+assign / seek / poll"]
+end
+subgraph MAIL["TaskManager — StreamTask mailbox thread"]
+ A["SourceOperator
+handle AddSplitEvent"]
+ S["SourceReaderBase
+pollNext()"] --> EM["KafkaRecordEmitter
+deserialize and emit"]
+ EM --> MAP["Chained transform
+processElement"]
+ MAP -->|"return to emitter"| O["Split currentOffset
+record.offset + 1"]
+end
+subgraph SHARED["TaskManager handoff"]
+ Q["RecordsWithSplitIds queue"]
+end
+E -. "AddSplitEvent via Flink control path" .-> A
+A -. "split assignment work" .-> K
+K --> Q --> S
+class E control
+class K io
+class A,S,EM,MAP runtime
+class O state
+class Q worker
+
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12
+linkStyle default stroke:#64748b,stroke-width:1.7px,stroke-linecap:round

@@ -1,0 +1,30 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","nodeSpacing":48,"rankSpacing":65,"htmlLabels":false,"padding":22}}}%%
+flowchart TB
+
+subgraph MODEL["Five questions for the presentation"]
+ direction TB
+ A["1. OWNER
+Which leader or coordinator?"]
+ B["2. THREAD
+Which process mutates state?"]
+ C["3. MESSAGE
+Call, queue, data channel or RPC?"]
+ D["4. DURABLE FACT
+Which log or checkpoint survives?"]
+ E["5. VISIBILITY
+What can a downstream reader see?"]
+ A --> B --> C --> D --> E
+end
+class A control
+class B runtime
+class C io
+class D store
+class E state
+
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12
+linkStyle default stroke:#64748b,stroke-width:1.7px,stroke-linecap:round
