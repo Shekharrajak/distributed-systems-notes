@@ -9,7 +9,7 @@ fs.mkdirSync(shots,{recursive:true});
 const {default:puppeteer}=await import(process.env.GUIDE_PUPPETEER_MODULE||'puppeteer');
 const browser=await puppeteer.launch({executablePath:process.env.GUIDE_CHROME_BIN,headless:true,args:['--disable-gpu','--no-sandbox']});
 const report={pages:[],errors:[],interactions:[]};
-const validationFile=path.join(root,process.argv.includes('--offsets')?'kafka-offset-validation.json':'kafka-recovery-validation.json');
+const validationFile=path.join(root,process.argv.includes('--spark')?'spark-guide-validation.json':process.argv.includes('--offsets')?'kafka-offset-validation.json':'kafka-recovery-validation.json');
 const previous=JSON.parse(fs.readFileSync(validationFile,'utf8'));
 try{
  const page=await browser.newPage();page.on('pageerror',e=>report.errors.push(e.message));

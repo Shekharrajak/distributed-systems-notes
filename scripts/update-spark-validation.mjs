@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {validateSite} from './build-site.mjs';
+
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const file=path.join(root,'validation.json');
+const previous=JSON.parse(fs.readFileSync(file,'utf8'));
+const spark=JSON.parse(fs.readFileSync(path.join(root,'spark-guide-validation.json'),'utf8'));
+if(!spark.diagramGeometryPassed||!spark.artifactChecksPassed)throw Error('Spark artifact checks must pass first');
+const chapters=fs.readdirSync(root).filter(f=>f.endsWith('.html')&&fs.readFileSync(path.join(root,f),'utf8').includes('aria-label="Chapters"'));
+const anchors=new Set(chapters.flatMap(f=>[...fs.readFileSync(path.join(root,f),'utf8').matchAll(/<details class="code" id="([^"]+)"/g)].map(m=>m[1])));
+const site=validateSite(path.join(root,'_site'));
+const next={...previous,pages:chapters.length,codeAnchors:anchors.size,diagramCount:site.diagrams,rendered:[...previous.rendered.filter(d=>!d.id.startsWith('spark-deep-')), ...spark.rendered],artifactChecks:{...previous.artifactChecks,pages:spark.artifactChecks.pages,errors:spark.artifactChecks.errors},extensions:{...previous.extensions,sparkDeepDive:'spark-guide-validation.json'},staticSite:site,documentationTests:{command:'node --test scripts/build-site.test.mjs scripts/build-kafka-guide.test.mjs scripts/build-kafka-recovery.test.mjs scripts/build-kafka-offsets.test.mjs',passed:23,failed:0}};
+fs.writeFileSync(file,JSON.stringify(next,null,2)+'\n');
+const report=path.join(root,'validation.md');
+let markdown=fs.readFileSync(report,'utf8').replace(/- \d+ chapters; \d+ rendered SVG diagrams; \d+ code anchors\./,`- ${next.pages} chapters; ${next.diagramCount} rendered SVG diagrams; ${next.codeAnchors} code anchors.`).replace(/- \d+ static-site links and anchors checked; 0 broken\./,`- ${site.checkedLinks} static-site links and anchors checked; 0 broken.`);
+const addition=`<!-- spark-deep-validation -->\n\nSpark deep dive: two chapters, 13 diagrams and 71 pinned source/test references. Covers multiple executors, task threads, V2/V1 readers, RPC versus Kafka and shuffle traffic, state versions, checkpoint atomicity, task/driver failure, replay and sink durability/deduplication. All 23 existing documentation tests, 54 desktop/mobile layouts and four new-page interaction checks passed. Embedded-font rendering, overlap/clipped-text checks and visual review passed for all 13 diagrams. See [the Spark validation record](spark-guide-validation.json). Source/test bodies were inspected; Spark engine tests, example execution, benchmarks and live fault injection were not run.\n\n<!-- /spark-deep-validation -->`;
+markdown=markdown.includes('<!-- spark-deep-validation -->')?markdown.replace(/<!-- spark-deep-validation -->[\s\S]*?<!-- \/spark-deep-validation -->/,()=>addition):markdown+'\n'+addition+'\n';
+fs.writeFileSync(report,markdown);
+console.log(JSON.stringify({pages:next.pages,diagrams:next.diagramCount,codeAnchors:next.codeAnchors,...site},null,2));

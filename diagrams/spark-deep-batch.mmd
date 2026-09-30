@@ -1,0 +1,32 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":52,"rankSpacing":70},"sequence":{"useMaxWidth":false,"actorMargin":70,"messageMargin":44,"wrap":true,"width":180}}}%%
+sequenceDiagram
+box rgb(224,242,254) Driver
+ participant D as MicroBatchExecution
+end
+box rgb(241,245,249) Shared checkpoint
+ participant C as Logs and state
+end
+box rgb(220,252,231) Executor JVMs
+ participant E1 as E1
+ participant E2 as E2
+ participant E3 as E3
+end
+ D->>D: Determine batch 42 offset vector
+ D->>C: Persist offsets/42
+ par Execute assigned source ranges
+ D->>E1: Launch P0 and P1 tasks
+ E1->>E1: Fetch and transform records
+ and
+ D->>E2: Launch P2 task
+ E2->>E2: Fetch and transform records
+ and
+ D->>E3: Launch P3 task
+ E3->>E3: Fetch and transform records
+ end
+ Note over E1,E3: Stateful plans shuffle keys and persist state as needed
+ E1-->>D: Successful task results
+ E2-->>D: Successful task results
+ E3-->>D: Successful task results
+ D->>D: Finish driver sink commit after collecting results
+ D->>C: Persist commits/42
+ D->>D: Advance to batch 43

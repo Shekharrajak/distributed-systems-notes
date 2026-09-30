@@ -4,10 +4,12 @@ import {fileURLToPath} from 'node:url';
 import {diagrams as rpcDiagrams} from './kafka-guide-diagrams.mjs';
 import {diagrams as recoveryDiagrams} from './kafka-recovery-diagrams.mjs';
 import {diagrams as offsetDiagrams} from './kafka-offset-diagrams.mjs';
+import {diagrams as sparkDiagrams} from './spark-guide-diagrams.mjs';
 
 const recovery=process.argv.includes('--recovery');
 const offsets=process.argv.includes('--offsets');
-const diagrams=offsets?offsetDiagrams:recovery?recoveryDiagrams:rpcDiagrams;
+const spark=process.argv.includes('--spark');
+const diagrams=spark?sparkDiagrams:offsets?offsetDiagrams:recovery?recoveryDiagrams:rpcDiagrams;
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const {default:puppeteer}=await import(process.env.GUIDE_PUPPETEER_MODULE||'puppeteer');
@@ -37,16 +39,17 @@ try{
       for(let i=0;i<labels.length;i++)for(let j=i+1;j<labels.length;j++)if(intersects(labels[i],labels[j]))overlaps.push({label:labels[i].text,label2:labels[j].text});
       const texts=[...host.querySelectorAll('text')].filter(e=>e.textContent.trim()).map(rect),textOverlaps=[];
       for(let i=0;i<texts.length;i++)for(let j=i+1;j<texts.length;j++)if(intersects(texts[i],texts[j]))textOverlaps.push({a:texts[i].text,b:texts[j].text});
+      const bounds=rect(element),clippedText=texts.filter(t=>t.x<bounds.x-1||t.y<bounds.y-1||t.x+t.w>bounds.x+bounds.w+1||t.y+t.h>bounds.y+bounds.h+1).map(t=>t.text);
       const labelFonts=[...new Set([...host.querySelectorAll('text,foreignObject p,foreignObject span')].filter(e=>e.textContent.trim()).map(e=>getComputedStyle(e).fontFamily))];
-      return {id:diagram.id,width:box.width,height:box.height,ubuntuLoaded:document.fonts.check('17px Ubuntu'),renderedFont:getComputedStyle(element.querySelector('text')||element).fontFamily,labelFonts,overlaps,textOverlaps,svg:new XMLSerializer().serializeToString(element)};
+      return {id:diagram.id,width:box.width,height:box.height,ubuntuLoaded:document.fonts.check('17px Ubuntu'),renderedFont:getComputedStyle(element.querySelector('text')||element).fontFamily,labelFonts,overlaps,textOverlaps,clippedText,svg:new XMLSerializer().serializeToString(element)};
     },diagram);
     const embedded=svg.includes('<style>')?svg.replace('<style>',`<style>${fontCSS}\n`):svg.replace(/(<svg[^>]*>)/,`$1<style>${fontCSS}</style>`);
     fs.writeFileSync(path.join(root,'diagrams',diagram.id+'.svg'),embedded);
     results.push(result);console.log(JSON.stringify(result));
   }
 }finally{await browser.close();}
-const file=path.join(root,offsets?'kafka-offset-validation.json':recovery?'kafka-recovery-validation.json':'kafka-guide-validation.json');
+const file=path.join(root,spark?'spark-guide-validation.json':offsets?'kafka-offset-validation.json':recovery?'kafka-recovery-validation.json':'kafka-guide-validation.json');
 const previous=JSON.parse(fs.readFileSync(file,'utf8'));
-const passed=results.every(r=>r.ubuntuLoaded&&r.labelFonts.length&&r.labelFonts.every(f=>f.includes('Ubuntu'))&&!r.overlaps.length&&!r.textOverlaps.length);
+const passed=results.every(r=>r.ubuntuLoaded&&r.labelFonts.length&&r.labelFonts.every(f=>f.includes('Ubuntu'))&&!r.overlaps.length&&!r.textOverlaps.length&&!r.clippedText.length);
 fs.writeFileSync(file,JSON.stringify({...previous,rendered:results,diagramGeometryPassed:passed},null,2)+'\n');
 if(!passed)process.exitCode=2;

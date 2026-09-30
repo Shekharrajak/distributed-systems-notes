@@ -10,9 +10,9 @@
     "datafusion-comet": "1628c520096e12ba3fb13988d6ee235070e77e07",
     "arrow-rs": "8208506f8f9ec193c08023ac2477d211d1d86d20"
   },
-  "pages": 25,
-  "codeAnchors": 227,
-  "diagramCount": 87,
+  "pages": 27,
+  "codeAnchors": 298,
+  "diagramCount": 100,
   "rendered": [
     {
       "id": "index-1-1",
@@ -837,6 +837,175 @@
       ],
       "overlaps": [],
       "textOverlaps": []
+    },
+    {
+      "id": "spark-deep-deployment",
+      "width": 635.5234375,
+      "height": 911.0714111328125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-batch",
+      "width": 1336,
+      "height": 1306,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-ranges",
+      "width": 924.21875,
+      "height": 632,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-calls",
+      "width": 665.28125,
+      "height": 1535.696044921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-network",
+      "width": 1087,
+      "height": 765,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-shuffle",
+      "width": 589.25,
+      "height": 887.2605590820312,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-storage",
+      "width": 1563.234375,
+      "height": 631.9264526367188,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-state-restore",
+      "width": 1081,
+      "height": 815,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-recovery",
+      "width": 692.46875,
+      "height": 1199.196044921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-crash-window",
+      "width": 1100,
+      "height": 819,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-sink-ledger",
+      "width": 560,
+      "height": 911,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-no-new-data",
+      "width": 720.55078125,
+      "height": 1381.555419921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "spark-deep-loss-conditions",
+      "width": 2279.1875,
+      "height": 590,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
     }
   ],
   "unitTestsExecuted": false,
@@ -1043,6 +1212,22 @@
         "fontLoaded": true
       },
       {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
         "file": "spark-scheduler-networking.html",
         "width": 1440,
         "overflow": false,
@@ -1243,6 +1428,22 @@
         "fontLoaded": true
       },
       {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
         "file": "spark-scheduler-networking.html",
         "width": 390,
         "overflow": false,
@@ -1280,6 +1481,18 @@
   "extensions": {
     "kafkaRpc": "kafka-guide-validation.json",
     "kafkaRecovery": "kafka-recovery-validation.json",
-    "kafkaOffsets": "kafka-offset-validation.json"
+    "kafkaOffsets": "kafka-offset-validation.json",
+    "sparkDeepDive": "spark-guide-validation.json"
+  },
+  "staticSite": {
+    "files": 267,
+    "htmlPages": 50,
+    "diagrams": 100,
+    "checkedLinks": 2098
+  },
+  "documentationTests": {
+    "command": "node --test scripts/build-site.test.mjs scripts/build-kafka-guide.test.mjs scripts/build-kafka-recovery.test.mjs scripts/build-kafka-offsets.test.mjs",
+    "passed": 23,
+    "failed": 0
   }
 }
