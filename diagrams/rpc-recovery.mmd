@@ -1,0 +1,25 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":35,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":170}}}%%
+sequenceDiagram
+
+box rgb(224,242,254) Flink control
+participant J as JobMaster
+end
+box rgb(237,233,254) Flink task attempts
+participant Old as Old task
+participant New as Replacement task
+end
+box rgb(241,245,249) Durable systems
+participant CP as Checkpoint store
+participant K as Kafka
+end
+Old->>CP: CP42 includes nextOffset=105 and T42
+J->>J: CP42 completed
+Old->>K: EndTxn T42
+Note over Old: Task/pod dies before seeing reply
+J->>New: Deploy replacement with CP42 handles
+New->>CP: Restore state + pending committables
+New->>K: Resolve/retry commit of T42
+K-->>New: Commit outcome or actionable error
+New->>New: Restore split / local assign + seek
+New->>K: Fetch input P0 from offset 105
+K-->>New: Replay records after checkpoint cut

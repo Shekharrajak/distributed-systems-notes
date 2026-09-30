@@ -1,0 +1,33 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"flowchart":{"curve":"basis","nodeSpacing":48,"rankSpacing":65,"htmlLabels":false,"padding":22}}}%%
+flowchart TB
+
+subgraph KAFKA["Kafka replicated partition logs"]
+ DATA[("User topic logs
+What records exist?")]
+ OFF[("__consumer_offsets
+What group position is recorded?")]
+ TXN[("__transaction_state
+What decision did the coordinator make?")]
+ META[("KRaft metadata log
+Who owns what?")]
+end
+subgraph FLINK["Flink state and recovery"]
+ LIVE[("Live keyed/operator state
+heap / RocksDB / configured backend")]
+ CHECK[("Durable checkpoints
+source offsets + state + sink intent")]
+end
+DATA -. "replay retained input" .-> LIVE
+LIVE -->|"snapshot"| CHECK
+TXN -. "fences and transaction decisions" .-> DATA
+META -. "leadership and placement" .-> DATA
+class DATA,OFF,TXN,META,CHECK store
+class LIVE state
+
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef worker fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef runtime fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef io fill:#ffedd5,stroke:#f97316,color:#7c2d12
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+classDef state fill:#fef9c3,stroke:#ca8a04,color:#713f12
+linkStyle default stroke:#64748b,stroke-width:1.7px,stroke-linecap:round

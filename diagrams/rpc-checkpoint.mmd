@@ -1,0 +1,27 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":35,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":170}}}%%
+sequenceDiagram
+
+box rgb(224,242,254) JobManager
+participant J as Checkpoint coordinator
+end
+box rgb(237,233,254) TaskManager task/mailbox paths
+participant S as Source task
+participant W as Transform + sink task
+end
+box rgb(241,245,249) Durable storage
+participant D as Checkpoint storage
+end
+J->>S: triggerCheckpoint RPC
+S-->>J: Trigger accepted
+S-)W: Barrier through Flink data channel
+S->>S: Snapshot next offsets at mailbox cut
+W->>W: Align inputs if needed
+W->>W: Flush + prepareCommit + snapshot state
+S->>D: Async persist source state
+W->>D: Async persist state + committables
+S-->>J: acknowledgeCheckpoint with state handles
+W-->>J: acknowledgeCheckpoint with state handles
+J->>D: Persist completed checkpoint metadata
+J-->>S: notifyCheckpointComplete
+J-->>W: notifyCheckpointComplete
+Note over J,W: Completion makes recovery state durable, not every output immediately visible

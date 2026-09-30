@@ -1,0 +1,24 @@
+%%{init: {"theme":"base","htmlLabels":false,"themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a","noteBkgColor":"#fef9c3","noteTextColor":"#422006"},"sequence":{"useMaxWidth":false,"actorMargin":55,"boxMargin":18,"messageMargin":35,"diagramMarginX":24,"diagramMarginY":24,"wrap":true,"width":170}}}%%
+sequenceDiagram
+
+box rgb(237,233,254) Flink task paths
+participant C as Sink committer
+participant S as Source fetcher
+end
+box rgb(241,245,249) Kafka broker roles
+participant T as Transaction coordinator
+participant L as Output leader
+participant G as Group coordinator
+end
+par Commit output transaction
+C->>T: EndTxn COMMIT via producer Sender
+T->>T: Replicate decision in __transaction_state
+T-->>C: EndTxn success
+T->>L: WriteTxnMarkers COMMIT
+L->>L: Replicate marker / advance LSO when eligible
+L-->>T: Marker result
+and Optional independent source bookkeeping
+S->>G: Optional OffsetCommit via commitAsync
+G-->>S: Offset commit callback result
+end
+Note over L,G: Output visibility and group offset are not one atomic Flink Kafka transaction
