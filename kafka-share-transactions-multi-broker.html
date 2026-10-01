@@ -1,0 +1,1196 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>One transaction across many Kafka brokers · Distributed systems field guide</title><link rel="stylesheet" href="styles.css"><style>.flow{background:#fff;border:1px solid #d6e0ea;border-radius:8px;padding:20px;overflow:auto;line-height:1.7;font-size:14px}main p,main li{overflow-wrap:anywhere}main li{margin:10px 0}</style><script defer src="app.js"></script></head><body data-page="kafka-share-transactions-multi-broker.html"><a class="skip" href="#main">Skip to content</a><header><a href="index.html">Distributed systems / source to sink</a><span>Ownership · durable decisions · recovery</span></header><div class="layout"><aside class="sidebar"><label for="chapter-filter">Find a chapter</label><input id="chapter-filter" type="search" placeholder="Election, coordinator, marker…"><nav aria-label="Chapters"><a href="index.html" data-nav="index.html"><span>00</span>Start with the whole system</a><a href="01-kafka-record-lifecycle.html" data-nav="01-kafka-record-lifecycle.html"><span>01</span>Kafka: processes, storage and networking</a><a href="kafka-transactions-recovery.html" data-nav="kafka-transactions-recovery.html"><span>02</span>Kafka: transactions and failure recovery</a><a href="02-kafka-streams.html" data-nav="02-kafka-streams.html"><span>03</span>Kafka Streams: tasks, state and recovery</a><a href="03-kafka-connect.html" data-nav="03-kafka-connect.html"><span>04</span>Kafka Connect: workers and source / sink commits</a><a href="04-flink-runtime.html" data-nav="04-flink-runtime.html"><span>05</span>Flink: cluster components and RPCs</a><a href="01-plan-and-deploy.html" data-nav="01-plan-and-deploy.html"><span>06</span>Flink: from API graph to physical tasks</a><a href="02-records-time-and-backpressure.html" data-nav="02-records-time-and-backpressure.html"><span>07</span>Flink: records, network credits and event time</a><a href="flink-state-checkpoint-recovery.html" data-nav="flink-state-checkpoint-recovery.html"><span>08</span>Flink: checkpoint and recovery protocol</a><a href="flink-kafka-connector.html" data-nav="flink-kafka-connector.html"><span>09</span>Flink Kafka connector: threads and EOS</a><a href="spark-scheduler-networking.html" data-nav="spark-scheduler-networking.html"><span>10</span>Spark: scheduling, shuffle and retries</a><a href="05-spark-structured-streaming.html" data-nav="05-spark-structured-streaming.html"><span>11</span>Spark: streaming batches and commit logs</a><a href="iceberg-storage-commits.html" data-nav="iceberg-storage-commits.html"><span>12</span>Iceberg: files, snapshots and atomic publication</a><a href="datafusion-query-engine.html" data-nav="datafusion-query-engine.html"><span>13</span>DataFusion: plans, async batches and memory</a><a href="comet-spark-native.html" data-nav="comet-spark-native.html"><span>14</span>Comet: Spark tasks with native execution</a><a href="rust-arrow-runtime.html" data-nav="rust-arrow-runtime.html"><span>15</span>Rust and Arrow: ownership, async work and failure</a><a href="end-to-end-example.html" data-nav="end-to-end-example.html"><span>16</span>End to end: one event and every crash window</a><a href="06-delivery-and-recovery.html" data-nav="06-delivery-and-recovery.html"><span>17</span>Design tradeoffs: latency, throughput and resilience</a><a href="07-code-evidence.html" data-nav="07-code-evidence.html"><span>18</span>Code evidence and validation</a><a href="kafka-flink-distributed-runtime.html" data-nav="kafka-flink-distributed-runtime.html"><span>19</span>Kafka + Flink: pods, threads and RPCs</a><a href="kafka-rpc-atlas.html" data-nav="kafka-rpc-atlas.html"><span>20</span>Kafka RPC schema atlas</a><a href="kafka-leadership-metadata.html" data-nav="kafka-leadership-metadata.html"><span>21</span>Kafka leadership, metadata and broker failure</a><a href="kafka-group-share-coordinators.html" data-nav="kafka-group-share-coordinators.html"><span>22</span>Group and share coordinators: ownership and recovery</a><a href="kafka-transaction-marker-recovery.html" data-nav="kafka-transaction-marker-recovery.html"><span>23</span>Transaction markers, crash windows and recovery</a><a href="kafka-offset-commits-flink-spark.html" data-nav="kafka-offset-commits-flink-spark.html"><span>24</span>Offset commits: Kafka, Flink and Spark</a><a href="spark-distributed-execution.html" data-nav="spark-distributed-execution.html"><span>25</span>Spark: driver, executors and Kafka reads</a><a href="spark-checkpoint-failure-recovery.html" data-nav="spark-checkpoint-failure-recovery.html"><span>26</span>Spark: checkpoints, state and failure recovery</a></nav></aside><main id="main"><div class="hero">
+<p class="eyebrow">Chapter 27 · KIP-1289 implementation snapshot · 1 October 2026</p>
+<h1>One transaction across many Kafka brokers</h1>
+<p class="intro">Partition leaders own logs. Coordinators own keys mapped to internal-topic partitions. A transaction records one durable decision, then delivers that decision to every participant.</p>
+<p>Source baseline: Kafka <code>3b9b4a4b3844122da8d9bd0c2d36d981524a6e86</code>, inspected on <code>design/connect-share-group-eos</code>, the KIP-1289 implementation snapshot. This page describes development-branch behavior, not a released-feature guarantee. Broker placements below are illustrative.</p>
+<nav class="toc" aria-label="On this page"><a href="#mental">Mental model</a><a href="#owners">Owners</a><a href="#placement">Broker placement</a><a href="#staging">Stage work</a><a href="#markers">Commit fan-out</a><a href="#output">Output log</a><a href="#share">Share state</a><a href="#failures">Failures</a><a href="#limits">Branch limitations</a><a href="#evidence">Code and tests</a></nav>
+</div>
+
+<section id="mental"><h2>1. Start with three durable facts</h2>
+<div class="table-scroll"><table><thead><tr><th>Fact</th><th>Where it lives</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>Output exists</td><td>Transactional record batches in output topic partitions</td><td>Produced and replicated does not yet mean visible to read_committed readers.</td></tr>
+<tr><td>Input completion is staged</td><td>TX_PENDING batches in __share_group_state</td><td>The acquired source records are reserved for this transaction's outcome.</td></tr>
+<tr><td>Outcome is decided</td><td>PREPARE_COMMIT / PREPARE_ABORT in __transaction_state</td><td>The coordinator must finish delivering this decision, including after failover.</td></tr>
+</tbody></table></div>
+<p><strong>WriteTxnMarkers distributes the decision.</strong> On an ordinary output partition it appends a COMMIT/ABORT control record. On this branch's share-state partition it generates durable replacement share snapshots. It neither republishes the output payload nor deletes the source record.</p>
+<pre class="flow">process -> produce output + stage input acknowledgement
+        -> persist decision -> apply decision at participants -> persist COMPLETE</pre>
+<p>The word PREPARE in PREPARE_COMMIT does not mean the coordinator is still free to abort. This is Kafka's durable commit decision. This protocol should not be drawn as a fresh prepare-vote RPC to every participant before deciding.</p>
+<p>Read <a href="kafka-transaction-marker-recovery.html">ordinary transaction-marker recovery</a> for the baseline protocol; this page adds transactional share acknowledgements and separates implemented paths from branch gaps.</p>
+</section>
+
+<section id="owners"><h2>2. Where does each coordinator live?</h2>
+<p>A coordinator is a service inside a broker process, with ownership divided into shards. It is not one dedicated coordinator machine for the entire cluster. <code>BrokerServer</code> constructs the services; leadership of their internal-topic partitions determines which shards each broker actively serves.</p>
+<div class="table-scroll"><table><thead><tr><th>Role</th><th>Ownership key and placement</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td>Source partition leader</td><td>Metadata assigns the leader of orders/P0, orders/P1, etc.</td><td>Serve ShareFetch; track acquisition state in SharePartition; stage transactional acknowledgements and persist through the share-state service.</td></tr>
+<tr><td>Output partition leader</td><td>Metadata assigns the leader of results/P0, results/P1, etc.</td><td>Append output data and transaction control records; replicate the log and enforce committed-read visibility.</td></tr>
+<tr><td>Group coordinator</td><td>abs(groupId.hashCode()) % offsets partition count; leader of that __consumer_offsets partition</td><td>Share-group membership and member epochs. Also conventional consumer-group metadata/offsets.</td></tr>
+<tr><td>Share coordinator</td><td>abs("groupId:topicUuid:partition".hashCode()) % share-state partition count; leader of that __share_group_state partition</td><td>Durable per-group, per-source-partition delivery state. One group can span several share-state shards.</td></tr>
+<tr><td>Transaction coordinator</td><td>abs(transactionalId.hashCode()) % transaction-state partition count; leader of that __transaction_state partition</td><td>Producer identity, participant set, durable outcome and marker retries.</td></tr>
+<tr><td>KRaft controller</td><td>Elected controller-quorum leader; controller and broker roles may use separate processes</td><td>Cluster metadata, partition assignments and leadership changes. It does not decide each application's transaction.</td></tr>
+</tbody></table></div>
+<p>These hashes choose <em>internal partition numbers</em>, not broker IDs. Metadata maps those partitions to their current leaders. There is no rule that source/P0, output/P0 and an internal P0 must live on the same broker.</p>
+<p><code>BrokerMetadataPublisher</code> applies metadata changes to ReplicaManager, then calls coordinator <code>onElection</code>/<code>onResignation</code>. For the share coordinator these schedule shard load/unload. Followers replicate partition logs; they do not concurrently serve as the active coordinator for the same shard. A new leader reconstructs state by replay.</p>
+<p class="refs">Code: <a href="#ev-services">Broker services</a> · <a href="#ev-election">Leadership callbacks</a> · <a href="#ev-share-map">Share hash</a> · <a href="#ev-group-map">Group hash</a> · <a href="#ev-txn-map">Transaction hash</a></p>
+</section>
+
+<section id="placement"><h2>3. A concrete four-broker placement</h2>
+<p>Suppose worker W consumes orders/P0 record 11 and orders/P1 record 25, then writes results/P0 and results/P1 in transaction T. Assume the two source keys map to share-state shards S2 and S7. These shard numbers are illustrative, not calculated from real IDs.</p>
+<div class="table-scroll"><table><thead><tr><th>Partition / state</th><th>Leader</th><th>Follower replicas</th><th>Marker participant for T?</th></tr></thead><tbody>
+<tr><td>orders/P0</td><td>B1</td><td>B2, B3</td><td>No, merely reading it does not enroll it.</td></tr>
+<tr><td>orders/P1</td><td>B2</td><td>B3, B4</td><td>No.</td></tr>
+<tr><td>results/P0</td><td>B2</td><td>B3, B4</td><td>Yes: output control marker.</td></tr>
+<tr><td>results/P1</td><td>B3</td><td>B4, B1</td><td>Yes: output control marker.</td></tr>
+<tr><td>__share_group_state/S2</td><td>B3</td><td>B1, B4</td><td>Yes: finalize record 11's staged state.</td></tr>
+<tr><td>__share_group_state/S7</td><td>B4</td><td>B2, B3</td><td>Yes: finalize record 25's staged state.</td></tr>
+<tr><td>__transaction_state/T4</td><td>B4</td><td>B1, B2</td><td>No: stores the decision and participant set.</td></tr>
+<tr><td>__consumer_offsets/G6</td><td>B1</td><td>B2, B4</td><td>No for this share-ACK-only example: hosts membership, not this transaction's completion.</td></tr>
+</tbody></table></div>
+<p><strong>Placement caveat:</strong> the branch's local membership check prevents the B2 staging path from working as drawn when group ownership stays on B1. The following marker fan-out describes the code path <em>after successful durable staging</em>; it is not evidence that this complete four-broker pipeline currently succeeds. See <a href="#limits">the exact gap</a>.</p>
+<pre class="flow">T's coordinator on B4
+  -> B2: WriteTxnMarkers for results/P0
+  -> B3: WriteTxnMarkers for results/P1 and __share_group_state/S2
+  -> B4: WriteTxnMarkers for __share_group_state/S7
+
+Each destination leader replicates its own resulting log writes.
+The transaction coordinator does not send a separate marker to every follower.</pre>
+<p>B3 can receive output and share-state participants in the same request; its handler dispatches them differently. Co-location saves network hops but does not merge ownership or durability boundaries. A broker can host many unrelated shard leaders and followers at once.</p>
+</section>
+
+<section id="staging"><h2>4. What happens before commit?</h2>
+<ol>
+<li><strong>Acquire:</strong> ShareFetch goes to the source-serving leader. The application receives records acquired for its member. The group coordinator manages membership; it does not relay every data record.</li>
+<li><strong>Produce:</strong> the worker sends transactional output to the current output leaders. Their logs retain producer ID/epoch and sequence metadata. Participant registration/verification follows the negotiated transaction protocol.</li>
+<li><strong>Acknowledge locally:</strong> the worker records ACCEPT/REJECT and drains acknowledgements for the producer transaction. Local acknowledge is not yet a durable source completion.</li>
+<li><strong>Stage:</strong> producer <code>TxnShareAcknowledgeHandler</code> targets the source topic partition. <code>KafkaApis.handleTxnShareAcknowledgeRequest</code> checks feature gates, authorization, batches and membership, maps source keys to share-state partitions, and calls <code>AddPartitionsToTxnManager.addOrVerifyTransaction</code> to register those partitions.</li>
+<li><strong>Persist pending state:</strong> after registration, <code>SharePartitionManager.acknowledgeTransactional</code> calls <code>SharePartition.stageTxnAcknowledge</code>. Acquired records become TX_PENDING with staged producer ID, epoch, ACK type and intended disposition. The acquisition timer is cancelled. <code>writeShareGroupState</code> uses the persister to write to the appropriate share-state coordinator.</li>
+<li><strong>Await success:</strong> the application must finish all output sends and acknowledgement staging before committing. A failure can leave partial work across partitions; transaction abort/recovery resolves it. Registration itself is not proof that an acknowledgement was staged.</li>
+</ol>
+<p>ACCEPT and REJECT are the user acknowledgement choices allowed here; RELEASE and RENEW are not transactional. Internal gap acknowledgements also exist for offsets without an application record. Before durable staging, acquisition timeout governs redelivery; after staging, transaction completion governs it.</p>
+<p>Source leaders can talk to remote share-state leaders through the persister. This remote persistence path exists independently of the missing remote membership-validation path.</p>
+<p class="refs"><a href="#ev-stage-api">Broker staging</a> · <a href="#ev-stage-state">SharePartition staging</a> · <a href="#ev-producer-route">Producer routing/retry</a></p>
+</section>
+
+<section id="markers"><h2>5. From EndTxn to all participant markers</h2>
+<div class="table-scroll"><table><thead><tr><th>Method</th><th>Execution and logic</th></tr></thead><tbody>
+<tr><td>TransactionCoordinator.endTransaction</td><td>Runs at T's coordinator. Validates producer/state; persists PREPARE_COMMIT or PREPARE_ABORT with appendTransactionToLog.</td></tr>
+<tr><td>sendTxnMarkersCallback</td><td>After the decision append succeeds, rechecks ownership/identity, prepares eventual completion metadata, replies to EndTxn, then enqueues markers. EndTxn success can precede participant completion.</td></tr>
+<tr><td>addTxnMarkersToSend</td><td>Stores pending completion and takes the transaction's participant set.</td></tr>
+<tr><td>addTxnMarkersToBrokerQueue</td><td>Looks up current leaders, groups partitions by destination broker and queues a TxnMarkerEntry for each destination.</td></tr>
+<tr><td>generateRequests</td><td>The marker sender drains broker queues and builds WriteTxnMarkers requests with completion handlers.</td></tr>
+<tr><td>KafkaApis.handleWriteTxnMarkersRequest</td><td>Receiver authorizes the request, checks local partitions, dispatches by topic and aggregates asynchronous per-partition results.</td></tr>
+<tr><td>TransactionMarkerRequestCompletionHandler.onComplete</td><td>Removes successful participants; requeues retriable failures with current metadata; discards stale coordinator work.</td></tr>
+<tr><td>maybeWriteTxnCompletion / writeTxnCompletion / tryAppendToLog</td><td>Once no participants remain, rechecks ownership and persists COMPLETE_COMMIT or COMPLETE_ABORT. Eligible completion-log errors are retried.</td></tr>
+</tbody></table></div>
+<p>The RPC carries producer ID, producer epoch, decision, participant topic/partition lists, coordinator epoch and transaction version. It carries no source record ACK list or output payload: those are already staged. The receiving broker chooses ordinary output, __consumer_offsets or __share_group_state handling.</p>
+<p>TV2 normally stages at producer epoch E and completes with marker epoch E+1. Producer epoch is separate from coordinator epoch and partition leader epoch.</p>
+<p class="refs"><a href="#ev-endtxn">Decision callback</a> · <a href="#ev-marker-queue">Queue and completion</a> · <a href="#ev-marker-routing">Leader grouping</a> · <a href="#ev-marker-receive">Receiver routing</a> · <a href="#ev-retry">Response handling</a></p>
+</section>
+
+<section id="output"><h2>6. What exactly changes in the output log?</h2>
+<p><code>MemoryRecords.withEndTransactionMarker</code> builds a control batch. The broker calls <code>ReplicaManager.appendRecords</code> with coordinator origin and requiredAcks=-1. Acknowledgement follows the partition replication policy; this is not a claim that every configured replica or every disk has fsynced.</p>
+<ol><li><code>ProducerAppendInfo.appendEndTxnMarker</code> checks producer and coordinator epochs. If the producer has an open data transaction, it constructs a CompletedTxn with first offset, marker offset and abort flag; then updates producer state.</li>
+<li><code>UnifiedLog</code> append processing computes the transaction's last stable offset, updates the transaction index, and calls <code>ProducerStateManager.completeTxn</code>.</li>
+<li><code>completeTxn</code> removes the transaction from ongoingTxns and retains it in unreplicatedTxns until high-watermark progress makes completion stable.</li>
+<li><code>UnifiedLog.lastStableOffset</code> limits committed reads by both the high watermark and earliest unstable transaction. An earlier open transaction can still hold back later committed output.</li>
+<li>The abort index identifies aborted ranges. The ordinary consumer's <code>CompletedFetch</code> skips aborted transactional batches for read_committed and never returns control records as user records.</li></ol>
+<pre class="flow">Before: [X, transactional, producer=700] [Y, transactional, producer=700]
+After:  [X, transactional, producer=700] [Y, transactional, producer=700] [COMMIT]
+
+No payload rewrite. ABORT adds an abort marker; it does not delete X and Y.</pre>
+<p>read_uncommitted readers can observe data before the transaction resolves. The EOS visibility discussion assumes read_committed downstream readers.</p>
+<p class="refs"><a href="#ev-output-marker">Marker validation</a> · <a href="#ev-log-append">Log bookkeeping</a> · <a href="#ev-output-complete">Unreplicated completion</a> · <a href="#ev-lso">LSO</a> · <a href="#ev-consumer">Consumer filtering</a></p>
+</section>
+
+<section id="share"><h2>7. What exactly changes for source record 11?</h2>
+<p><code>ShareCoordinatorService.completeTransaction</code> checks service activity, the target topic and TV2 support, then schedules a <em>regular coordinator write operation</em>. Unlike ordinary output and the group-offset path, this branch does not append a normal end-transaction control record to the share-state log through that handler.</p>
+<p><code>ShareCoordinatorShard.completeTransaction</code> scans its shareStateMap. <code>isMatchingPendingBatch</code> selects only TX_PENDING batches whose staged producer ID matches and whose staged epoch equals markerEpoch-1 for TV2. It can match several source keys belonging to this transaction on the same shard; it leaves other producers and epochs alone.</p>
+<div class="table-scroll"><table><thead><tr><th>Decision</th><th>finalDeliveryState</th><th>Result for source work</th></tr></thead><tbody>
+<tr><td>COMMIT + ACCEPT</td><td>ACKNOWLEDGED</td><td>Completion recorded; record 11 is not acquired again for this group.</td></tr>
+<tr><td>COMMIT + REJECT</td><td>Stored staged disposition, e.g. ARCHIVING or ARCHIVED</td><td>Archiving may still need separate DLQ work. Marker success does not prove a DLQ publication finished.</td></tr>
+<tr><td>ABORT</td><td>AVAILABLE</td><td>Eligible for reacquisition after source-cache refresh; no successful completion recorded.</td></tr>
+</tbody></table></div>
+<p>The shard creates replacement PersisterStateBatch values without staged transaction metadata, increments deliveryCompleteCount only for ACKNOWLEDGED/ARCHIVED, increments snapshotEpoch, and returns new ShareSnapshot records plus affected keys. <code>CoordinatorWriteEvent.run</code> appends/replays them. High-watermark advancement releases deferred writes; only then does the completion future report success.</p>
+<p>After success, KafkaApis invalidates affected local SharePartition caches. If the source leader is remote, its next fetch detects cached TX_PENDING and reloads durable state. This is eventual refresh, not a cluster-wide invalidation broadcast. Local invalidation errors do not reverse the durable decision.</p>
+<pre class="flow">Output marker finishes first: X may become visible
+Share marker still pending:   record 11 remains TX_PENDING, not reacquirable
+Share marker finishes:       record 11 becomes ACKNOWLEDGED
+
+Share marker finishes first:  source completion is durable
+Output marker still pending:  output visibility waits; the durable COMMIT must finish</pre>
+<p>Atomic outcome does not promise simultaneous visibility, a global consumer snapshot, or completion of external side effects. Once the durable state is terminal, a duplicate matching marker finds no TX_PENDING batch to change.</p>
+<p class="refs"><a href="#ev-share-service">Service</a> · <a href="#ev-share-finalize">Shard finalization</a> · <a href="#ev-runtime-write">Write execution</a> · <a href="#ev-runtime-hw">Durability callback</a> · <a href="#ev-cache">Remote cache fallback</a></p>
+</section>
+
+<section id="failures"><h2>8. Failures change owners, not a durable decision</h2>
+<div class="table-scroll"><table><thead><tr><th>Failure</th><th>Recovery</th><th>Availability effect</th></tr></thead><tbody>
+<tr><td>Worker dies before staging</td><td>Acquisition timeout can release input; any uncommitted output transaction must resolve/abort.</td><td>Redelivery waits for lock recovery.</td></tr>
+<tr><td>Worker dies after staging, before decision</td><td>Transaction timeout/recovery drives ABORT if still undecided. Share-state completion releases matching pending input.</td><td>TX_PENDING waits for transaction resolution, not acquisition expiry.</td></tr>
+<tr><td>Output leader fails</td><td>New leader uses replicated log state. Producer/marker sender refreshes metadata and retries applicable requests.</td><td>Writes/visibility pause during election and recovery.</td></tr>
+<tr><td>Share-state leader fails</td><td>New share shard leader loads durable state. Marker retries apply the same decision there.</td><td>Staging/completion waits for the shard to become active.</td></tr>
+<tr><td>Transaction coordinator dies after PREPARE_COMMIT</td><td>New owner replays __transaction_state; loadTransactionsForTxnTopicPartition requeues COMMIT markers.</td><td>No switch to ABORT to bypass a slow participant.</td></tr>
+<tr><td>Marker applied but response lost</td><td>Retry the same decision. Share completion is a no-op after matching batches leave TX_PENDING.</td><td>Extra request/append work; delayed coordinator cleanup.</td></tr>
+<tr><td>EndTxn response lost</td><td>Commit outcome is unknown to the client. Retry the same commit as supported by the client API, or close and recover. Do not change an uncertain commit into abort.</td><td>The application must resolve uncertainty before treating work as failed.</td></tr>
+<tr><td>Remote source cache remains stale</td><td>Next-fetch TX_PENDING detection reinitializes from the share coordinator.</td><td>Abort redelivery or delayed-fetch wakeup can lag.</td></tr>
+<tr><td>Insufficient live replicas / unavailable leader</td><td>Wait for the required replication and leadership conditions. Guarantees rely on the configured durability policy.</td><td>Safety does not imply continuous availability.</td></tr>
+</tbody></table></div>
+<p>The marker handler retries UNKNOWN_TOPIC_OR_PARTITION, NOT_LEADER_OR_FOLLOWER, replica-shortage, timeout and storage errors. Fenced sender errors stop obsolete work. Compatibility errors have special removal paths. In leader lookup, a known-but-unavailable node is queued; a missing endpoint can be treated as a deleted partition and skipped. Do not summarize all conditions as “retry forever.”</p>
+<p class="refs"><a href="#ev-recovery">Coordinator replay</a> · <a href="#ev-retry">Retry classification</a> · <a href="#ev-marker-routing">Leader lookup branches</a></p>
+</section>
+
+<section id="limits"><h2>9. What this branch does not yet prove</h2>
+<details open class="code"><summary>Confirmed code gap: membership validation is local</summary>
+<p>The source broker's KafkaApis calls its own groupCoordinator.validateShareGroupMember. That method schedules a read for the group's __consumer_offsets shard in its local CoordinatorRuntime. There is no forwarding in this method. A source broker that does not own the group shard cannot complete this validation normally.</p>
+<p>The producer handler targets the source partition and retries retriable NOT_COORDINATOR errors; retrying that source leader does not move group ownership. With source partitions on different brokers, they cannot all be co-located with one group's coordinator. This is a source-derived multi-broker staging limitation, not a fault-injection result.</p>
+<p>A remote validation/forwarding or another correctly fenced membership-validation design is needed. This note does not implement a fix. Single-broker tests and mocked service tests cannot establish that arbitrary placement works.</p>
+<p><a href="#ev-local-validation">Exact local validation method</a> · <a href="#ev-producer-route">Producer target and retry</a> · <a href="#ev-runtime-owner">Local runtime ownership check</a></p></details>
+<details class="code"><summary>Review gap: share completion accepts coordinatorEpoch but does not enforce it here</summary>
+<p>ShareCoordinatorService.completeTransaction accepts coordinatorEpoch but neither checks nor forwards it to the shard. The shard matches staged producer ID/epoch. Ordinary output marker validation explicitly checks the coordinator epoch. This is a real implementation difference; it does not alone prove an exploitable incorrect commit. Stale/conflicting marker and failover scenarios need explicit coverage before claiming equivalent fencing.</p></details>
+<details class="code"><summary>Scaling, engine boundaries and missing integration evidence</summary>
+<p>Share completion scans the shard's shareStateMap and constructs replacement snapshots for matching keys. There is no producer-indexed lookup in this method; cost depends on shard state, not only the number of ACKs in this transaction.</p>
+<p>Multiple worker producers normally own different transactions. A common share group does not merge them. One worker can atomically cover several output partitions plus its staged source ACKs; independently committed transactions in different Flink sink subtasks are not made globally atomic by an ACK owner.</p>
+<p>A filter can commit acknowledgement-only work. A one-to-many mapping can include all output records and one input ACK in one transaction, provided that one transaction owns the entire fan-out. Cross-cluster output and arbitrary external side effects are outside this boundary.</p>
+<p>The group-membership gate, coordinator-epoch difference and remote cache liveness require dedicated multi-broker tests. The tests run below validate components; they do not establish complete distributed EOS for this prototype.</p></details>
+</section>
+
+<section id="evidence"><h2>10. Source evidence and validation</h2>
+<p>Code excerpts below are copied from the pinned local source, with exact paths and line numbers. The implementation revision was not accessible at its public fork URL when checked, so the evidence is embedded here rather than linked to unavailable source. These excerpts intentionally do not borrow released/trunk guarantees for branch-only share transactions.</p>
+<p>Apache Kafka source excerpts are licensed under the <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.</p>
+<div class="table-scroll" id="validation-result"><table><thead><tr><th>Validation on 1 October 2026</th><th>Result</th></tr></thead><tbody><tr><td>ShareCoordinatorShardTest + ShareCoordinatorServiceTest</td><td>97 tests passed; no skipped tests or failures. Includes state transitions, TV2 epoch matching, duplicate/stale markers and service guards.</td></tr><tr><td>Focused core tests, normal command</td><td>Blocked by existing Checkstyle: SharePartition.java:104 JavaNCSS 1,503 exceeds 1,500.</td></tr><tr><td>Same core selection, excluding :core:checkstyleMain</td><td>42 tests executed: 36 passed, 6 failed. KafkaApis cases fail during Feature initialization: SHARE_VERSION latest production SV_2 is smaller than default SV_3. These failures prevent claiming successful API-route validation.</td></tr><tr><td>Live multi-broker fault injection</td><td>Not run. Broker placement and crash walkthroughs are source-derived, not observed deployments.</td></tr></tbody></table></div>
+<details class="code"><summary>Exact Kafka validation commands</summary><pre><code>./gradlew :share-coordinator:test --tests org.apache.kafka.coordinator.share.ShareCoordinatorShardTest --tests org.apache.kafka.coordinator.share.ShareCoordinatorServiceTest
+
+./gradlew :core:test --tests 'kafka.server.KafkaApisTest.testWriteTxnMarkersRoutesShareStateMarkerToShareCoordinator' --tests 'kafka.server.KafkaApisTest.testWriteTxnMarkersShareCoordinatorErrorTranslation' --tests 'kafka.server.share.SharePartitionManagerTest.testInvalidateSharePartitionsRemovesOnlyAffectedSharePartition' --tests 'kafka.coordinator.transaction.TransactionMarkerChannelManagerTest' --tests 'kafka.coordinator.transaction.TransactionMarkerRequestCompletionHandlerTest'
+
+# Repeat the core command with -x :core:checkstyleMain to execute tests despite the existing style violation.</code></pre></details>
+<p>Useful next integration test: place the source leader, group coordinator, share-state leader and transaction coordinator on different brokers; then test staging, commit, abort, lost responses and each leader failure. Add two source partitions with different leaders and verify no acknowledged-record redelivery after convergence. This is proposed coverage, not a test executed for this note.</p>
+<details class="code" id="ev-services"><summary>services · BrokerServer.scala:388</summary><p class="path">core/src/main/scala/kafka/server/BrokerServer.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 388-423</p><pre><code>388        groupConfigManager = new GroupConfigManager(config.groupCoordinatorConfig, config.shareGroupConfig)
+389
+390        /* create share coordinator */
+391        shareCoordinator = createShareCoordinator()
+392
+393        /* create shared timer for share group components */
+394        shareGroupTimer = new SystemTimerReaper(&quot;share-group-reaper&quot;, new SystemTimer(&quot;share-group&quot;))
+395
+396        /* create persister */
+397        persister = createShareStatePersister()
+398
+399        /* create metrics object to be shared with share DLQ manager share partition manager*/
+400        shareGroupMetrics = new ShareGroupMetrics(time)
+401
+402        /* create log reader object to share with share group DLQ manager and SharePartitionManager */
+403        shareGroupLogReader = new ReplicaManagerLogReader(replicaManager)
+404
+405        /* create share group DLQ manager */
+406        shareGroupDLQManager = createShareGroupDLQManager()
+407
+408        partitionMetadataClient = createPartitionMetadataClient(metadataCache)
+409
+410        groupCoordinator = createGroupCoordinator()
+411
+412        val producerIdManagerSupplier = () =&gt; ProducerIdManager.rpc(
+413          config.brokerId,
+414          time,
+415          () =&gt; lifecycleManager.brokerEpoch,
+416          clientToControllerChannelManager
+417        )
+418
+419        // Create transaction coordinator, but don't start it until we've started replica manager.
+420        // Hardcode Time.SYSTEM for now as some Streams tests fail otherwise, it would be good to fix the underlying issue
+421        transactionCoordinator = TransactionCoordinator(config, replicaManager,
+422          new KafkaScheduler(1, true, &quot;transaction-log-manager-&quot;),
+423          producerIdManagerSupplier, metrics, metadataCache, Time.SYSTEM)</code></pre></details>
+<details class="code" id="ev-election"><summary>election · BrokerMetadataPublisher.scala:146</summary><p class="path">core/src/main/scala/kafka/server/metadata/BrokerMetadataPublisher.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 146-185</p><pre><code>146          try {
+147            // Notify the replica manager about changes to topics.
+148            replicaManager.applyDelta(topicsDelta, newImage)
+149          } catch {
+150            case t: Throwable =&gt; metadataPublishingFaultHandler.handleFault(&quot;Error applying topics &quot; +
+151              s&quot;delta in $deltaName&quot;, t)
+152          }
+153          try {
+154            // Update the group coordinator of local changes
+155            updateCoordinator(newImage,
+156              delta,
+157              Topic.GROUP_METADATA_TOPIC_NAME,
+158              groupCoordinator.onElection,
+159              (partitionIndex, leaderEpochOpt) =&gt; groupCoordinator.onResignation(partitionIndex, toOptionalInt(leaderEpochOpt))
+160            )
+161          } catch {
+162            case t: Throwable =&gt; metadataPublishingFaultHandler.handleFault(&quot;Error updating group &quot; +
+163              s&quot;coordinator with local changes in $deltaName&quot;, t)
+164          }
+165          try {
+166            // Update the transaction coordinator of local changes
+167            updateCoordinator(newImage,
+168              delta,
+169              Topic.TRANSACTION_STATE_TOPIC_NAME,
+170              txnCoordinator.onElection,
+171              txnCoordinator.onResignation)
+172          } catch {
+173            case t: Throwable =&gt; metadataPublishingFaultHandler.handleFault(&quot;Error updating txn &quot; +
+174              s&quot;coordinator with local changes in $deltaName&quot;, t)
+175          }
+176          try {
+177            updateCoordinator(newImage,
+178              delta,
+179              Topic.SHARE_GROUP_STATE_TOPIC_NAME,
+180              shareCoordinator.onElection,
+181              (partitionIndex, leaderEpochOpt) =&gt; shareCoordinator.onResignation(partitionIndex, toOptionalInt(leaderEpochOpt))
+182            )
+183          } catch {
+184            case t: Throwable =&gt; metadataPublishingFaultHandler.handleFault(&quot;Error updating share &quot; +
+185              s&quot;coordinator with local changes in $deltaName&quot;, t)</code></pre></details>
+<details class="code" id="ev-share-map"><summary>share-map · ShareCoordinatorService.java:284</summary><p class="path">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 284-291</p><pre><code>284      @Override
+285      public int partitionFor(SharePartitionKey key) {
+286          throwIfNotActive();
+287          // Call to asCoordinatorKey is necessary as we depend only on topicId (Uuid) and
+288          // not topic name. We do not want this calculation to distinguish between 2
+289          // SharePartitionKeys where everything except topic name is the same.
+290          return Utils.abs(key.asCoordinatorKey().hashCode()) % numPartitions;
+291      }</code></pre></details>
+<details class="code" id="ev-group-map"><summary>group-map · GroupCoordinatorService.java:455</summary><p class="path">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 455-460</p><pre><code>455      public int partitionFor(
+456          String groupId
+457      ) {
+458          throwIfNotActive();
+459          return Utils.abs(groupId.hashCode()) % numPartitions;
+460      }</code></pre></details>
+<details class="code" id="ev-txn-map"><summary>txn-map · TransactionStateManager.scala:439</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 439-439</p><pre><code>439    def partitionFor(transactionalId: String): Int = Utils.abs(transactionalId.hashCode) % transactionTopicPartitionCount</code></pre></details>
+<details class="code" id="ev-stage-api"><summary>stage-api · KafkaApis.scala:3865</summary><p class="path">core/src/main/scala/kafka/server/KafkaApis.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 3865-3914</p><pre><code>3865        sendPartitionResponse(erroneous.toMap)
+3866        return CompletableFuture.completedFuture[Unit](())
+3867      }
+3868
+3869      val shareStatePartitions = new util.HashSet[TopicPartition]()
+3870      validAcknowledgeBatches.keys.foreach { tip =&gt;
+3871        shareStatePartitions.add(new TopicPartition(
+3872          SHARE_GROUP_STATE_TOPIC_NAME,
+3873          shareCoordinator.partitionFor(SharePartitionKey.getInstance(groupId, tip))))
+3874      }
+3875
+3876      groupCoordinator.validateShareGroupMember(request.context, groupId, memberId, memberEpoch).thenCompose[Unit] { memberError =&gt;
+3877        if (memberError != Errors.NONE) {
+3878          requestHelper.sendMaybeThrottle(request, txnShareAcknowledgeRequest.getErrorResponse(AbstractResponse.DEFAULT_THROTTLE_TIME, memberError.exception))
+3879          CompletableFuture.completedFuture[Unit](())
+3880        } else {
+3881          val registrationDone = new CompletableFuture[Errors]()
+3882          addPartitionsToTxnManager.addOrVerifyTransaction(
+3883            transactionalId,
+3884            producerId,
+3885            producerEpoch,
+3886            shareStatePartitions,
+3887            errors =&gt; {
+3888              val firstError = errors.values().asScala.find(_ != Errors.NONE).getOrElse(Errors.NONE)
+3889              registrationDone.complete(firstError)
+3890            },
+3891            AddPartitionsToTxnManager.TransactionSupportedOperation.ADD_PARTITION)
+3892
+3893          registrationDone.thenCompose[Unit] { error =&gt;
+3894            if (error != Errors.NONE) {
+3895              requestHelper.sendMaybeThrottle(request, txnShareAcknowledgeRequest.getErrorResponse(AbstractResponse.DEFAULT_THROTTLE_TIME, error.exception))
+3896              CompletableFuture.completedFuture[Unit](())
+3897            } else {
+3898              sharePartitionManager.acknowledgeTransactional(
+3899                  memberId,
+3900                  groupId,
+3901                  producerId,
+3902                  producerEpoch,
+3903                  validAcknowledgeBatches.asJava)
+3904                .handle[Unit] { (result, exception) =&gt;
+3905                  if (exception != null) {
+3906                    requestHelper.sendMaybeThrottle(request, txnShareAcknowledgeRequest.getErrorResponse(AbstractResponse.DEFAULT_THROTTLE_TIME, exception))
+3907                  } else {
+3908                    sendPartitionResponse(result.asScala.toMap ++ erroneous)
+3909                  }
+3910                }
+3911              }
+3912          }
+3913        }
+3914      }</code></pre></details>
+<details class="code" id="ev-stage-state"><summary>stage-state · SharePartition.java:1150</summary><p class="path">core/src/main/java/kafka/server/share/SharePartition.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1150-1181</p><pre><code>1150                      ackTypeMap,
+1151                      subMap,
+1152                      persisterBatches
+1153                  );
+1154                  if (throwable != null) break;
+1155              }
+1156
+1157              if (throwable != null) {
+1158                  revertStagedAndRearm(persisterBatches, txnOwnerId, txnOwnerEpoch);
+1159              }
+1160          } finally {
+1161              lock.writeLock().unlock();
+1162          }
+1163
+1164          if (throwable != null) future.completeExceptionally(throwable);
+1165          else if (persisterBatches.isEmpty()) future.complete(null);
+1166          else writeShareGroupState(persisterBatches.stream().map(PersisterBatch::stateBatch).toList())
+1167              .whenComplete((result, exception) -&gt; {
+1168                  if (exception != null) {
+1169                      lock.writeLock().lock();
+1170                      try {
+1171                          revertStagedAndRearm(persisterBatches, txnOwnerId, txnOwnerEpoch);
+1172                      } finally {
+1173                          lock.writeLock().unlock();
+1174                      }
+1175                      future.completeExceptionally(exception);
+1176                      return;
+1177                  }
+1178                  future.complete(null);
+1179              });
+1180          return future;
+1181      }</code></pre></details>
+<details class="code" id="ev-producer-route"><summary>producer-route · TransactionManager.java:2176</summary><p class="path">clients/src/main/java/org/apache/kafka/clients/producer/internals/TransactionManager.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 2176-2209</p><pre><code>2176
+2177          @Override
+2178          FindCoordinatorRequest.CoordinatorType coordinatorType() {
+2179              return null;
+2180          }
+2181
+2182          @Override
+2183          TopicPartition targetTopicPartition() {
+2184              return targetTopicPartition;
+2185          }
+2186
+2187          @Override
+2188          public void handleResponse(AbstractResponse response) {
+2189              TxnShareAcknowledgeResponse txnShareAckResponse = (TxnShareAcknowledgeResponse) response;
+2190              Errors topLevelError = Errors.forCode(txnShareAckResponse.data().errorCode());
+2191              Errors error = topLevelError == Errors.NONE ?
+2192                  firstPartitionError(txnShareAckResponse).orElse(Errors.NONE) :
+2193                  topLevelError;
+2194
+2195              log.debug(&quot;Received TxnShareAcknowledge response for share group {}: errorCode={}&quot;,
+2196                  builder.data.groupId(), error);
+2197
+2198              if (error == Errors.NONE) {
+2199                  topicIdPartitions.forEach(pendingTxnShareAcks::remove);
+2200                  if (remainingRequests.decrementAndGet() == 0) {
+2201                      result.done();
+2202                  }
+2203              } else if (error.exception() instanceof RetriableException) {
+2204                  // Covers COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR and REQUEST_TIMED_OUT, whose
+2205                  // exceptions all extend RetriableException.
+2206                  reenqueue();
+2207              } else if (error == Errors.GROUP_AUTHORIZATION_FAILED) {
+2208                  abortableError(GroupAuthorizationException.forGroupId(builder.data.groupId()));
+2209              } else if (error == Errors.TRANSACTION_ABORTABLE) {</code></pre></details>
+<details class="code" id="ev-endtxn"><summary>endtxn · TransactionCoordinator.scala:979</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionCoordinator.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 979-1011</p><pre><code>979                              Right(txnMetadata, txnMetadata.prepareComplete(time.milliseconds()))
+980                          case TransactionState.PREPARE_ABORT =&gt;
+981                            if (txnMarkerResult != TransactionResult.ABORT)
+982                              logInvalidStateTransitionAndReturnError(transactionalId, txnMetadata.state, txnMarkerResult)
+983                            else
+984                              Right(txnMetadata, txnMetadata.prepareComplete(time.milliseconds()))
+985                          case TransactionState.DEAD | TransactionState.PREPARE_EPOCH_FENCE =&gt;
+986                            val errorMsg = s&quot;Found transactionalId $transactionalId with state ${txnMetadata.state}. &quot; +
+987                              s&quot;This is illegal as we should never have transitioned to this state.&quot;
+988                            fatal(errorMsg)
+989                            throw new IllegalStateException(errorMsg)
+990
+991                        }
+992                      })
+993                    } else {
+994                      debug(s&quot;The transaction coordinator epoch has changed to ${epochAndMetadata.coordinatorEpoch} after $txnMarkerResult was &quot; +
+995                        s&quot;successfully appended to the log for $transactionalId with old epoch $coordinatorEpoch&quot;)
+996                      Left(Errors.NOT_COORDINATOR)
+997                    }
+998                }
+999
+1000                preSendResult match {
+1001                  case Left(err) =&gt;
+1002                    info(s&quot;Aborting sending of transaction markers after appended $txnMarkerResult to transaction log and returning $err error to client for $transactionalId's EndTransaction request&quot;)
+1003                    responseCallback(err, RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH)
+1004
+1005                  case Right((txnMetadata, newPreSendMetadata)) =&gt;
+1006                    // we can respond to the client immediately and continue to write the txn markers if
+1007                    // the log append was successful
+1008                    responseCallback(Errors.NONE, newPreSendMetadata.producerId, newPreSendMetadata.producerEpoch)
+1009
+1010                    txnMarkerChannelManager.addTxnMarkersToSend(coordinatorEpoch, txnMarkerResult, txnMetadata, newPreSendMetadata)
+1011                }</code></pre></details>
+<details class="code" id="ev-marker-queue"><summary>marker-queue · TransactionMarkerChannelManager.scala:271</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 271-336</p><pre><code>271    def addTxnMarkersToSend(coordinatorEpoch: Int,
+272                            txnResult: TransactionResult,
+273                            txnMetadata: TransactionMetadata,
+274                            newMetadata: TxnTransitMetadata): Unit = {
+275      val transactionalId = txnMetadata.transactionalId
+276      val pendingCompleteTxn = new PendingCompleteTxn(
+277        transactionalId,
+278        coordinatorEpoch,
+279        txnMetadata,
+280        newMetadata)
+281
+282      val prev = transactionsWithPendingMarkers.put(transactionalId, pendingCompleteTxn)
+283      if (prev != null) {
+284        info(s&quot;Replaced an existing pending complete txn $prev with $pendingCompleteTxn while adding markers to send.&quot;)
+285      }
+286      addTxnMarkersToBrokerQueue(txnMetadata.producerId,
+287        txnMetadata.producerEpoch, txnResult, pendingCompleteTxn, txnMetadata.topicPartitions.asScala.toSet)
+288      maybeWriteTxnCompletion(transactionalId)
+289    }
+290
+291    def numTxnsWithPendingMarkers: Int = transactionsWithPendingMarkers.size
+292
+293    private def hasPendingMarkersToWrite(txnMetadata: TransactionMetadata): Boolean = {
+294      txnMetadata.inLock(() =&gt;
+295        !txnMetadata.topicPartitions.isEmpty
+296      )
+297    }
+298
+299    def maybeWriteTxnCompletion(transactionalId: String): Unit = {
+300      Option(transactionsWithPendingMarkers.get(transactionalId)).foreach { pendingCompleteTxn =&gt;
+301        if (!hasPendingMarkersToWrite(pendingCompleteTxn.txnMetadata) &amp;&amp;
+302            transactionsWithPendingMarkers.remove(transactionalId, pendingCompleteTxn)) {
+303          writeTxnCompletion(pendingCompleteTxn)
+304        }
+305      }
+306    }
+307
+308    private def tryAppendToLog(txnLogAppend: PendingCompleteTxn): Unit = {
+309      // try to append to the transaction log
+310      def appendCallback(error: Errors): Unit =
+311        error match {
+312          case Errors.NONE =&gt;
+313            trace(s&quot;Completed transaction for ${txnLogAppend.transactionalId} with coordinator epoch ${txnLogAppend.coordinatorEpoch}, final state after commit: ${txnLogAppend.txnMetadata.state}&quot;)
+314
+315          case Errors.NOT_COORDINATOR =&gt;
+316            info(s&quot;No longer the coordinator for transactionalId: ${txnLogAppend.transactionalId} while trying to append to transaction log, skip writing to transaction log&quot;)
+317
+318          case Errors.COORDINATOR_NOT_AVAILABLE =&gt;
+319            info(s&quot;Not available to append $txnLogAppend: possible causes include ${Errors.UNKNOWN_TOPIC_OR_PARTITION}, ${Errors.NOT_ENOUGH_REPLICAS}, &quot; +
+320              s&quot;${Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND} and ${Errors.REQUEST_TIMED_OUT}; retry appending&quot;)
+321
+322            // enqueue for retry
+323            txnLogAppendRetryQueue.add(txnLogAppend)
+324
+325          case Errors.COORDINATOR_LOAD_IN_PROGRESS =&gt;
+326            info(s&quot;Coordinator is loading the partition ${txnStateManager.partitionFor(txnLogAppend.transactionalId)} and hence cannot complete append of $txnLogAppend; &quot; +
+327              s&quot;skip writing to transaction log as the loading process should complete it&quot;)
+328
+329          case other: Errors =&gt;
+330            val errorMsg = s&quot;Unexpected error ${other.exceptionName} while appending to transaction log for ${txnLogAppend.transactionalId}&quot;
+331            fatal(errorMsg)
+332            throw new IllegalStateException(errorMsg)
+333        }
+334
+335      txnStateManager.appendTransactionToLog(txnLogAppend.transactionalId, txnLogAppend.coordinatorEpoch,
+336        txnLogAppend.newMetadata, appendCallback, _ == Errors.COORDINATOR_NOT_AVAILABLE, RequestLocal.noCaching)</code></pre></details>
+<details class="code" id="ev-marker-routing"><summary>marker-routing · TransactionMarkerChannelManager.scala:339</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerChannelManager.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 339-410</p><pre><code>339    def addTxnMarkersToBrokerQueue(producerId: Long,
+340                                   producerEpoch: Short,
+341                                   result: TransactionResult,
+342                                   pendingCompleteTxn: PendingCompleteTxn,
+343                                   topicPartitions: immutable.Set[TopicPartition]): Unit = {
+344      val txnTopicPartition = txnStateManager.partitionFor(pendingCompleteTxn.transactionalId)
+345      val partitionsByDestination: immutable.Map[Option[Node], immutable.Set[TopicPartition]] = topicPartitions.groupBy { topicPartition: TopicPartition =&gt;
+346        OptionConverters.toScala(metadataCache.getPartitionLeaderEndpoint(topicPartition.topic, topicPartition.partition, interBrokerListenerName))
+347      }
+348
+349      val coordinatorEpoch = pendingCompleteTxn.coordinatorEpoch
+350      // Extract transaction version from metadata. In practice, clientTransactionVersion should never be null
+351      // (it's always set when loading from log or creating new metadata), but we check defensively.
+352      val transactionVersion = {
+353        val clientTransactionVersion = pendingCompleteTxn.txnMetadata.clientTransactionVersion()
+354        if (clientTransactionVersion != null) {
+355          clientTransactionVersion.featureLevel()
+356        } else {
+357          0.toShort
+358        }
+359      }
+360
+361      for ((broker: Option[Node], topicPartitions: immutable.Set[TopicPartition]) &lt;- partitionsByDestination) {
+362        broker match {
+363          case Some(brokerNode) =&gt;
+364            val marker = new TxnMarkerEntry(producerId, producerEpoch, coordinatorEpoch, result, topicPartitions.toList.asJava, transactionVersion)
+365            val pendingCompleteTxnAndMarker = new PendingCompleteTxnAndMarkerEntry(pendingCompleteTxn, marker)
+366
+367            if (brokerNode == Node.noNode) {
+368              // if the leader of the partition is known but node not available, put it into an unknown broker queue
+369              // and let the sender thread to look for its broker and migrate them later
+370              markersQueueForUnknownBroker.addMarkers(txnTopicPartition, pendingCompleteTxnAndMarker)
+371            } else {
+372              addMarkersForBroker(brokerNode, txnTopicPartition, pendingCompleteTxnAndMarker)
+373            }
+374
+375          case None =&gt;
+376            val transactionalId = pendingCompleteTxn.transactionalId
+377            txnStateManager.getTransactionState(transactionalId) match {
+378              case Left(error) =&gt;
+379                info(s&quot;Encountered $error trying to fetch transaction metadata for $transactionalId with coordinator epoch $coordinatorEpoch; cancel sending markers to its partition leaders&quot;)
+380                transactionsWithPendingMarkers.remove(transactionalId, pendingCompleteTxn)
+381
+382              case Right(Some(epochAndMetadata)) =&gt;
+383                if (epochAndMetadata.coordinatorEpoch != coordinatorEpoch) {
+384                  info(s&quot;The cached metadata has changed to $epochAndMetadata (old coordinator epoch is $coordinatorEpoch) since preparing to send markers; cancel sending markers to its partition leaders&quot;)
+385                  transactionsWithPendingMarkers.remove(transactionalId, pendingCompleteTxn)
+386                } else {
+387                  // if the leader of the partition is unknown, skip sending the txn marker since
+388                  // the partition is likely to be deleted already
+389                  info(s&quot;Couldn't find leader endpoint for partitions $topicPartitions while trying to send transaction markers for &quot; +
+390                    s&quot;$transactionalId, these partitions are likely deleted already and hence can be skipped&quot;)
+391
+392                  val txnMetadata = epochAndMetadata.transactionMetadata
+393
+394                  txnMetadata.inLock(() =&gt;
+395                    topicPartitions.foreach(txnMetadata.removePartition)
+396                  )
+397
+398                  maybeWriteTxnCompletion(transactionalId)
+399                }
+400
+401              case Right(None) =&gt;
+402                val errorMsg = s&quot;The coordinator still owns the transaction partition for $transactionalId, but there is &quot; +
+403                  s&quot;no metadata in the cache; this is not expected&quot;
+404                fatal(errorMsg)
+405                throw new IllegalStateException(errorMsg)
+406
+407            }
+408        }
+409      }
+410</code></pre></details>
+<details class="code" id="ev-marker-receive"><summary>marker-receive · KafkaApis.scala:1867</summary><p class="path">core/src/main/scala/kafka/server/KafkaApis.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1867-1930</p><pre><code>1867            } else if (partition.topic == SHARE_GROUP_STATE_TOPIC_NAME) {
+1868              shareCoordinator.completeTransaction(
+1869                partition,
+1870                marker.producerId,
+1871                marker.producerEpoch,
+1872                marker.coordinatorEpoch,
+1873                marker.transactionResult,
+1874                markerTransactionVersion
+1875              ).whenComplete { (affectedSharePartitions, exception) =&gt;
+1876                val markerError = if (exception == null) {
+1877                  if (affectedSharePartitions != null &amp;&amp; !affectedSharePartitions.isEmpty) {
+1878                    try {
+1879                      sharePartitionManager.invalidateSharePartitions(affectedSharePartitions)
+1880                    } catch {
+1881                      case t: Throwable =&gt; error(s&quot;Failed to invalidate share partition caches for transaction marker on $partition&quot;, t)
+1882                    }
+1883                  }
+1884                  Errors.NONE
+1885                } else {
+1886                  Errors.forException(exception) match {
+1887                    case Errors.COORDINATOR_NOT_AVAILABLE | Errors.COORDINATOR_LOAD_IN_PROGRESS | Errors.NOT_COORDINATOR =&gt;
+1888                      Errors.NOT_LEADER_OR_FOLLOWER
+1889                    case error =&gt;
+1890                      error
+1891                  }
+1892                }
+1893                addResultAndMaybeComplete(partition, markerError)
+1894              }
+1895            } else {
+1896              // Otherwise, the regular appendRecords path is used for all the non __consumer_offsets
+1897              // partitions or for all partitions when the new group coordinator is disabled.
+1898              // If topicIdPartition contains Uuid.ZERO_UUid all functionality will fall back on topic name.
+1899              controlRecords += replicaManager.topicIdPartition(partition) -&gt; MemoryRecords.withEndTransactionMarker(
+1900                producerId,
+1901                marker.producerEpoch,
+1902                new EndTransactionMarker(controlRecordType, marker.coordinatorEpoch)
+1903              )
+1904            }
+1905          }
+1906
+1907          if (controlRecords.nonEmpty) {
+1908            replicaManager.appendRecords(
+1909              timeout = config.requestTimeoutMs.toLong,
+1910              requiredAcks = TransactionCoordinator.EnforcedRequiredAcks,
+1911              internalTopicsAllowed = true,
+1912              origin = AppendOrigin.COORDINATOR,
+1913              entriesPerPartition = controlRecords,
+1914              requestLocal = requestLocal,
+1915              responseCallback = errors =&gt; {
+1916                errors.forEach { (topicIdPartition, partitionResponse) =&gt;
+1917                  addResultAndMaybeComplete(topicIdPartition.topicPartition(), partitionResponse.error)
+1918                }
+1919              },
+1920              transactionVersion = markerTransactionVersion
+1921            )
+1922          }
+1923        }
+1924      }
+1925
+1926      // No log appends were written as all partitions had incorrect log format
+1927      // so we need to send the error response
+1928      if (skippedMarkers == markers.size)
+1929        requestHelper.sendResponseExemptThrottle(request, new WriteTxnMarkersResponse(errors))
+1930    }</code></pre></details>
+<details class="code" id="ev-retry"><summary>retry · TransactionMarkerRequestCompletionHandler.scala:136</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionMarkerRequestCompletionHandler.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 136-197</p><pre><code>136                  for ((topicPartition, error) &lt;- errors.asScala) {
+137                    error match {
+138                      case Errors.NONE =&gt;
+139                        txnMetadata.removePartition(topicPartition)
+140
+141                      case Errors.CORRUPT_MESSAGE |
+142                           Errors.MESSAGE_TOO_LARGE |
+143                           Errors.RECORD_LIST_TOO_LARGE |
+144                           Errors.INVALID_REQUIRED_ACKS =&gt; // these are all unexpected and fatal errors
+145
+146                        throw new IllegalStateException(s&quot;Received fatal error ${error.exceptionName} while sending txn marker for $transactionalId&quot;)
+147
+148                      case Errors.UNKNOWN_TOPIC_OR_PARTITION |
+149                           Errors.NOT_LEADER_OR_FOLLOWER |
+150                           Errors.NOT_ENOUGH_REPLICAS |
+151                           Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND |
+152                           Errors.REQUEST_TIMED_OUT |
+153                           Errors.KAFKA_STORAGE_ERROR =&gt; // these are retriable errors
+154
+155                        info(s&quot;Sending $transactionalId's transaction marker for partition $topicPartition has failed with error ${error.exceptionName}, retrying &quot; +
+156                          s&quot;with current coordinator epoch ${epochAndMetadata.coordinatorEpoch}&quot;)
+157
+158                        retryPartitions += topicPartition
+159
+160                      case Errors.INVALID_PRODUCER_EPOCH |
+161                           Errors.TRANSACTION_COORDINATOR_FENCED =&gt; // producer or coordinator epoch has changed, this txn can now be ignored
+162
+163                        info(s&quot;Sending $transactionalId's transaction marker for partition $topicPartition has permanently failed with error ${error.exceptionName} &quot; +
+164                          s&quot;with the current coordinator epoch ${epochAndMetadata.coordinatorEpoch}; cancel sending any more transaction markers $txnMarker to the brokers&quot;)
+165
+166                        txnMarkerChannelManager.removeMarkersForTxn(pendingCompleteTxn)
+167                        abortSending = true
+168
+169                      case Errors.UNSUPPORTED_FOR_MESSAGE_FORMAT |
+170                           Errors.UNSUPPORTED_VERSION =&gt;
+171                        // The producer would have failed to send data to the failed topic so we can safely remove the partition
+172                        // from the set waiting for markers
+173                        info(s&quot;Sending $transactionalId's transaction marker from partition $topicPartition has failed with &quot; +
+174                          s&quot; ${error.name}. This partition will be removed from the set of partitions&quot; +
+175                          s&quot; waiting for completion&quot;)
+176                        txnMetadata.removePartition(topicPartition)
+177
+178                      case other =&gt;
+179                        throw new IllegalStateException(s&quot;Unexpected error ${other.exceptionName} while sending txn marker for $transactionalId&quot;)
+180                    }
+181                  }
+182                })
+183              }
+184
+185              if (!abortSending) {
+186                if (retryPartitions.nonEmpty) {
+187                  debug(s&quot;Re-enqueuing ${txnMarker.transactionResult} transaction markers for transactional id $transactionalId &quot; +
+188                    s&quot;under coordinator epoch ${txnMarker.coordinatorEpoch}&quot;)
+189
+190                  // re-enqueue with possible new leaders of the partitions
+191                  txnMarkerChannelManager.addTxnMarkersToBrokerQueue(
+192                    txnMarker.producerId,
+193                    txnMarker.producerEpoch,
+194                    txnMarker.transactionResult,
+195                    pendingCompleteTxn,
+196                    retryPartitions.toSet)
+197                } else {</code></pre></details>
+<details class="code" id="ev-output-marker"><summary>output-marker · ProducerAppendInfo.java:258</summary><p class="path">storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerAppendInfo.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 258-303</p><pre><code>258      private void checkCoordinatorEpoch(EndTransactionMarker endTxnMarker, long offset) {
+259          if (updatedEntry.coordinatorEpoch() &gt; endTxnMarker.coordinatorEpoch()) {
+260              if (origin == AppendOrigin.REPLICATION) {
+261                  log.info(&quot;Detected invalid coordinator epoch for producerId {} at offset {} in partition {}: {} is older than previously known coordinator epoch {}&quot;,
+262                          producerId, offset, topicPartition, endTxnMarker.coordinatorEpoch(), updatedEntry.coordinatorEpoch());
+263              } else {
+264                  throw new TransactionCoordinatorFencedException(&quot;Invalid coordinator epoch for producerId &quot; + producerId + &quot; at &quot; +
+265                          &quot;offset &quot; + offset + &quot; in partition &quot; + topicPartition + &quot;: &quot; + endTxnMarker.coordinatorEpoch() +
+266                          &quot; (zombie), &quot; + updatedEntry.coordinatorEpoch() + &quot; (current)&quot;);
+267              }
+268          }
+269      }
+270
+271      public Optional&lt;CompletedTxn&gt; appendEndTxnMarker(EndTransactionMarker endTxnMarker,
+272                                                       short producerEpoch,
+273                                                       long offset,
+274                                                       long timestamp,
+275                                                       short transactionVersion) {
+276          // For replication (REPLICATION origin), TV_UNKNOWN is allowed because:
+277          // 1. transactionVersion is not stored in MemoryRecords - it's only metadata in WriteTxnMarkersRequest
+278          // 2. When records are replicated, followers only see MemoryRecords without transactionVersion
+279          // 3. The leader already validated the marker with the correct transactionVersion (e.g., TV2 strict validation)
+280          // 4. Using TV_0 validation (markerEpoch &gt;= currentEpoch) is safe because it's more permissive than TV2
+281          //    (markerEpoch &gt; currentEpoch), so any marker that passed TV2 validation will pass TV_0 validation
+282          // For all other origins (CLIENT, COORDINATOR), transactionVersion must be explicitly specified.
+283          if (transactionVersion == TV_UNKNOWN &amp;&amp; origin != AppendOrigin.REPLICATION) {
+284              throw new IllegalArgumentException(&quot;transactionVersion must be explicitly specified, &quot; +
+285                      &quot;cannot use default value TV_UNKNOWN for origin &quot; + origin);
+286          }
+287          // For replication with TV_UNKNOWN, use legacy validation (TV_0 behavior) since the leader already
+288          // performed strict validation and the follower doesn't have access to the original transactionVersion
+289          short effectiveTransactionVersion = (transactionVersion == TV_UNKNOWN) ? 0 : transactionVersion;
+290          checkProducerEpoch(producerEpoch, offset, effectiveTransactionVersion);
+291          checkCoordinatorEpoch(endTxnMarker, offset);
+292
+293          // Only emit the `CompletedTxn` for non-empty transactions. A transaction marker
+294          // without any associated data will not have any impact on the last stable offset
+295          // and would not need to be reflected in the transaction index.
+296          Optional&lt;CompletedTxn&gt; completedTxn = updatedEntry.currentTxnFirstOffset().isPresent() ?
+297                  Optional.of(new CompletedTxn(producerId, updatedEntry.currentTxnFirstOffset().getAsLong(), offset,
+298                          endTxnMarker.controlType() == ControlRecordType.ABORT))
+299                  : Optional.empty();
+300          updatedEntry.update(producerEpoch, endTxnMarker.coordinatorEpoch(), timestamp);
+301          return completedTxn;
+302      }
+303</code></pre></details>
+<details class="code" id="ev-log-append"><summary>log-append · UnifiedLog.java:1277</summary><p class="path">storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1277-1290</p><pre><code>1277                                  updateHighWatermarkWithLogEndOffset();
+1278
+1279                                  // update the producer state
+1280                                  result.updatedProducers.values().forEach(producerStateManager::update);
+1281
+1282                                  // update the transaction index with the true last stable offset. The last offset visible
+1283                                  // to consumers using READ_COMMITTED will be limited by this value and the high watermark.
+1284                                  for (CompletedTxn completedTxn : result.completedTxns) {
+1285                                      long lastStableOffset = producerStateManager.lastStableOffset(completedTxn);
+1286                                      segment.updateTxnIndex(completedTxn, lastStableOffset);
+1287                                      producerStateManager.completeTxn(completedTxn);
+1288                                  }
+1289
+1290                                  // always update the last producer id map offset so that the snapshot reflects the current offset</code></pre></details>
+<details class="code" id="ev-output-complete"><summary>output-complete · ProducerStateManager.java:546</summary><p class="path">storage/src/main/java/org/apache/kafka/storage/internals/log/ProducerStateManager.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 546-560</p><pre><code>546      /**
+547       * Mark a transaction as completed. We will still await advancement of the high watermark before
+548       * advancing the first unstable offset.
+549       */
+550      public void completeTxn(CompletedTxn completedTxn) {
+551          TxnMetadata txnMetadata = ongoingTxns.remove(completedTxn.firstOffset());
+552          if (txnMetadata == null)
+553              throw new IllegalArgumentException(&quot;Attempted to complete transaction &quot; + completedTxn + &quot; on partition &quot;
+554                      + topicPartition + &quot; which was not started&quot;);
+555
+556          txnMetadata.lastOffset = OptionalLong.of(completedTxn.lastOffset());
+557          unreplicatedTxns.put(completedTxn.firstOffset(), txnMetadata);
+558          updateOldestTxnTimestamp();
+559      }
+560</code></pre></details>
+<details class="code" id="ev-lso"><summary>lso · UnifiedLog.java:671</summary><p class="path">storage/src/main/java/org/apache/kafka/storage/internals/log/UnifiedLog.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 671-686</p><pre><code>671      /**
+672       * The last stable offset (LSO) is defined as the first offset such that all lower offsets have been &quot;decided.&quot;
+673       * Non-transactional messages are considered decided immediately, but transactional messages are only decided when
+674       * the corresponding COMMIT or ABORT marker is written. This implies that the last stable offset will be equal
+675       * to the high watermark if there are no transactional messages in the log. Note also that the LSO cannot advance
+676       * beyond the high watermark.
+677       */
+678      public long lastStableOffset() {
+679          // cache the first unstable offset metadata to avoid a concurrent update breaking the isPresent check
+680          Optional&lt;LogOffsetMetadata&gt; firstUnstableOffsetMetadataCopy = firstUnstableOffsetMetadata;
+681          if (firstUnstableOffsetMetadataCopy.isPresent() &amp;&amp; firstUnstableOffsetMetadataCopy.get().messageOffset &lt; highWatermark()) {
+682              return firstUnstableOffsetMetadataCopy.get().messageOffset;
+683          } else {
+684              return highWatermark();
+685          }
+686      }</code></pre></details>
+<details class="code" id="ev-consumer"><summary>consumer · CompletedFetch.java:208</summary><p class="path">clients/src/main/java/org/apache/kafka/clients/consumer/internals/CompletedFetch.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 208-242</p><pre><code>208                  if (fetchConfig.isolationLevel == IsolationLevel.READ_COMMITTED &amp;&amp; currentBatch.hasProducerId()) {
+209                      // remove from the aborted transaction queue all aborted transactions which have begun
+210                      // before the current batch's last offset and add the associated producerIds to the
+211                      // aborted producer set
+212                      consumeAbortedTransactionsUpTo(currentBatch.lastOffset());
+213
+214                      long producerId = currentBatch.producerId();
+215                      if (containsAbortMarker(currentBatch)) {
+216                          abortedProducerIds.remove(producerId);
+217                      } else if (isBatchAborted(currentBatch)) {
+218                          log.debug(&quot;Skipping aborted record batch from partition {} with producerId {} and &quot; +
+219                                          &quot;offsets {} to {}&quot;,
+220                                  partition, producerId, currentBatch.baseOffset(), currentBatch.lastOffset());
+221                          nextFetchOffset = currentBatch.nextOffset();
+222                          continue;
+223                      }
+224                  }
+225
+226                  records = currentBatch.streamingIterator(decompressionBufferSupplier);
+227              } else {
+228                  Record record = records.next();
+229                  // skip any records out of range
+230                  if (record.offset() &gt;= nextFetchOffset) {
+231                      // we only do validation when the message should not be skipped.
+232                      maybeEnsureValid(fetchConfig, record);
+233
+234                      // control records are not returned to the user
+235                      if (!currentBatch.isControlBatch()) {
+236                          return record;
+237                      } else {
+238                          // Increment the next fetch offset when we skip a control batch.
+239                          nextFetchOffset = record.offset() + 1;
+240                      }
+241                  }
+242              }</code></pre></details>
+<details class="code" id="ev-share-service"><summary>share-service · ShareCoordinatorService.java:1021</summary><p class="path">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorService.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1021-1050</p><pre><code>1021      public CompletableFuture&lt;Set&lt;SharePartitionKey&gt;&gt; completeTransaction(
+1022          TopicPartition tp,
+1023          long txnOwnerId,
+1024          short txnOwnerEpoch,
+1025          int coordinatorEpoch,
+1026          TransactionResult result,
+1027          short transactionVersion
+1028      ) {
+1029          if (!isActive.get()) {
+1030              return CompletableFuture.failedFuture(Errors.COORDINATOR_NOT_AVAILABLE.exception());
+1031          }
+1032
+1033          if (!tp.topic().equals(Topic.SHARE_GROUP_STATE_TOPIC_NAME)) {
+1034              return CompletableFuture.failedFuture(new IllegalStateException(
+1035                  &quot;Completing a transaction for &quot; + tp + &quot; is not expected&quot;
+1036              ));
+1037          }
+1038
+1039          if (transactionVersion &lt; TransactionVersion.TV_2.featureLevel()) {
+1040              return CompletableFuture.failedFuture(new UnsupportedVersionException(
+1041                  &quot;Transactional share markers require transaction.version 2 or newer.&quot;
+1042              ));
+1043          }
+1044
+1045          return runtime.scheduleWriteOperation(
+1046              &quot;complete-share-transaction&quot;,
+1047              tp,
+1048              coordinator -&gt; coordinator.completeTransaction(txnOwnerId, txnOwnerEpoch, result, transactionVersion)
+1049          );
+1050      }</code></pre></details>
+<details class="code" id="ev-share-finalize"><summary>share-finalize · ShareCoordinatorShard.java:326</summary><p class="path">share-coordinator/src/main/java/org/apache/kafka/coordinator/share/ShareCoordinatorShard.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 326-410</p><pre><code>326      public CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; completeTransaction(
+327          long txnOwnerId,
+328          short txnOwnerEpoch,
+329          TransactionResult result,
+330          short transactionVersion
+331      ) {
+332          List&lt;CoordinatorRecord&gt; records = new ArrayList&lt;&gt;();
+333          Set&lt;SharePartitionKey&gt; affectedKeys = new HashSet&lt;&gt;();
+334          long timestamp = time.milliseconds();
+335
+336          for (Map.Entry&lt;SharePartitionKey, ShareGroupOffset&gt; entry : shareStateMap.entrySet()) {
+337              SharePartitionKey key = entry.getKey();
+338              ShareGroupOffset currentState = entry.getValue();
+339              List&lt;PersisterStateBatch&gt; finalizedBatches = new ArrayList&lt;&gt;(currentState.stateBatches().size());
+340              int deliveryCompleteCount = currentState.deliveryCompleteCount();
+341              boolean hasMatchingPendingBatch = false;
+342
+343              for (PersisterStateBatch batch : currentState.stateBatches()) {
+344                  if (isMatchingPendingBatch(batch, txnOwnerId, txnOwnerEpoch, transactionVersion)) {
+345                      byte finalState = finalDeliveryState(batch, result);
+346                      finalizedBatches.add(new PersisterStateBatch(
+347                          batch.firstOffset(),
+348                          batch.lastOffset(),
+349                          finalState,
+350                          batch.deliveryCount()
+351                      ));
+352                      if (isTerminalDeliveryState(finalState)) {
+353                          deliveryCompleteCount += Math.toIntExact(batch.lastOffset() - batch.firstOffset() + 1);
+354                      }
+355                      hasMatchingPendingBatch = true;
+356                  } else {
+357                      finalizedBatches.add(batch);
+358                  }
+359              }
+360
+361              if (hasMatchingPendingBatch) {
+362                  affectedKeys.add(key);
+363                  records.add(ShareCoordinatorRecordHelpers.newShareSnapshotRecord(
+364                      key.groupId(),
+365                      key.topicId(),
+366                      key.partition(),
+367                      new ShareGroupOffset.Builder()
+368                          .setSnapshotEpoch(currentState.snapshotEpoch() + 1)
+369                          .setStateEpoch(currentState.stateEpoch())
+370                          .setStartOffset(currentState.startOffset())
+371                          .setDeliveryCompleteCount(deliveryCompleteCount)
+372                          .setLeaderEpoch(currentState.leaderEpoch())
+373                          .setStateBatches(finalizedBatches)
+374                          .setCreateTimestamp(currentState.createTimestamp())
+375                          .setWriteTimestamp(timestamp)
+376                          .build()
+377                  ));
+378              }
+379          }
+380
+381          return new CoordinatorResult&lt;&gt;(records, affectedKeys);
+382      }
+383
+384      private boolean isMatchingPendingBatch(
+385          PersisterStateBatch batch,
+386          long txnOwnerId,
+387          short txnOwnerEpoch,
+388          short transactionVersion
+389      ) {
+390          short expectedStagedTxnOwnerEpoch = transactionVersion &gt;= TransactionVersion.TV_2.featureLevel() ?
+391              (short) (txnOwnerEpoch - 1) :
+392              txnOwnerEpoch;
+393          return batch.deliveryState() == DELIVERY_STATE_TX_PENDING
+394              &amp;&amp; batch.stagedProducerId() == txnOwnerId
+395              &amp;&amp; batch.stagedProducerEpoch() == expectedStagedTxnOwnerEpoch;
+396      }
+397
+398      private byte finalDeliveryState(PersisterStateBatch batch, TransactionResult result) {
+399          if (result == TransactionResult.ABORT) {
+400              return DELIVERY_STATE_AVAILABLE;
+401          }
+402          if (batch.stagedDeliveryState() != PersisterStateBatch.NO_STAGED_DELIVERY_STATE) {
+403              return batch.stagedDeliveryState();
+404          }
+405          return batch.stagedAckType() == ACKNOWLEDGE_TYPE_ACCEPT ? DELIVERY_STATE_ACKNOWLEDGED : DELIVERY_STATE_ARCHIVED;
+406      }
+407
+408      private boolean isTerminalDeliveryState(byte deliveryState) {
+409          return deliveryState == DELIVERY_STATE_ACKNOWLEDGED || deliveryState == DELIVERY_STATE_ARCHIVED;
+410      }</code></pre></details>
+<details class="code" id="ev-runtime-write"><summary>runtime-write · CoordinatorRuntime.java:1317</summary><p class="path">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1317-1372</p><pre><code>1317          public void run() {
+1318              try {
+1319                  // Get the context of the coordinator or fail if the coordinator is not in active state.
+1320                  withActiveContextOrThrow(tp, context -&gt; {
+1321                      // Execute the operation.
+1322                      result = op.generateRecordsAndResult(context.coordinator.coordinator());
+1323
+1324                      // Append the records and replay them to the state machine.
+1325                      context.append(
+1326                          producerId,
+1327                          producerEpoch,
+1328                          verificationGuard,
+1329                          result.records(),
+1330                          result.replayRecords(),
+1331                          result.isAtomic(),
+1332                          this
+1333                      );
+1334
+1335                      // If the operation is not done, create an operation timeout.
+1336                      if (!future.isDone()) {
+1337                          operationTimeout = new OperationTimeout(tp, this, writeTimeout.toMillis());
+1338                          timer.add(operationTimeout);
+1339
+1340                          // Only update when this event was appended to the deferred queue.
+1341                          deferredEventQueuedTimestamp = time.milliseconds();
+1342                      }
+1343                  });
+1344              } catch (Throwable t) {
+1345                  complete(t);
+1346              }
+1347          }
+1348
+1349          /**
+1350           * Completes the future with either the result of the write operation
+1351           * or the provided exception.
+1352           *
+1353           * @param exception The exception to complete the future with.
+1354           */
+1355          @Override
+1356          public void complete(Throwable exception) {
+1357              if (future.isDone()) {
+1358                  return;
+1359              }
+1360
+1361              final long purgatoryTimeMs = time.milliseconds() - deferredEventQueuedTimestamp;
+1362              CompletableFuture&lt;Void&gt; appendFuture = result != null ? result.appendFuture() : null;
+1363
+1364              if (exception == null) {
+1365                  if (appendFuture != null) result.appendFuture().complete(null);
+1366                  future.complete(result.response());
+1367              } else {
+1368                  if (appendFuture != null) result.appendFuture().completeExceptionally(exception);
+1369                  future.completeExceptionally(exception);
+1370              }
+1371
+1372              if (operationTimeout != null) {</code></pre></details>
+<details class="code" id="ev-runtime-hw"><summary>runtime-hw · CoordinatorRuntime.java:1820</summary><p class="path">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 1820-1833</p><pre><code>1820                      long newHighWatermark = lastHighWatermark.getAndSet(NO_OFFSET);
+1821
+1822                      CoordinatorContext context = coordinators.get(tp);
+1823                      if (context != null) {
+1824                          context.lock.lock();
+1825                          try {
+1826                              if (context.state == CoordinatorState.ACTIVE) {
+1827                                  // The updated high watermark can be applied to the coordinator only if the coordinator
+1828                                  // exists and is in the active state.
+1829                                  log.debug(&quot;Updating high watermark of {} to {}.&quot;, tp, newHighWatermark);
+1830                                  context.coordinator.updateLastCommittedOffset(newHighWatermark);
+1831                                  context.deferredEventQueue.completeUpTo(newHighWatermark);
+1832                                  coordinatorMetrics.onUpdateLastCommittedOffset(tp, newHighWatermark);
+1833                              } else {</code></pre></details>
+<details class="code" id="ev-cache"><summary>cache · SharePartitionManager.java:790</summary><p class="path">core/src/main/java/kafka/server/share/SharePartitionManager.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 790-810</p><pre><code>790
+791              CompletableFuture&lt;Void&gt; initializationFuture = sharePartition.maybeInitialize();
+792              if (initializationFuture.isDone() &amp;&amp; !initializationFuture.isCompletedExceptionally()
+793                  &amp;&amp; sharePartition.hasPendingTransactionalRecords()) {
+794                  sharePartition = reinitializePendingTransactionalSharePartition(sharePartitionKey);
+795                  initializationFuture = sharePartition.maybeInitialize();
+796              }
+797              final boolean initialized = initializationFuture.isDone();
+798              final SharePartition initializedSharePartition = sharePartition;
+799              initializationFuture.whenComplete((result, throwable) -&gt; {
+800                  if (throwable != null) {
+801                      handleInitializationException(sharePartitionKey, shareFetch, throwable);
+802                  }
+803                  // Though the share partition is initialized asynchronously, but if already initialized or
+804                  // errored then future should be completed immediately. If the initialization is not completed
+805                  // immediately then the requests might be waiting in purgatory until the share partition
+806                  // is initialized. Hence, trigger the completion of all pending delayed share fetch requests
+807                  // for the share partition.
+808                  if (!initialized) {
+809                      shareGroupMetrics.partitionLoadTime(initializedSharePartition.loadStartTimeMs());
+810                      delayedRequestNotifier.accept(delayedShareFetchKey);</code></pre></details>
+<details class="code" id="ev-recovery"><summary>recovery · TransactionStateManager.scala:562</summary><p class="path">core/src/main/scala/kafka/coordinator/transaction/TransactionStateManager.scala · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 562-589</p><pre><code>562            val transactionsPendingForCompletion = new mutable.ListBuffer[TransactionalIdCoordinatorEpochAndTransitMetadata]
+563            loadedTransactions.forEach((transactionalId, txnMetadata) =&gt; {
+564              txnMetadata.inLock(() =&gt; {
+565                // if state is PrepareCommit or PrepareAbort we need to complete the transaction
+566                txnMetadata.state match {
+567                  case TransactionState.PREPARE_ABORT =&gt;
+568                    transactionsPendingForCompletion +=
+569                      new TransactionalIdCoordinatorEpochAndTransitMetadata(transactionalId, coordinatorEpoch, TransactionResult.ABORT, txnMetadata, txnMetadata.prepareComplete(time.milliseconds()))
+570                  case TransactionState.PREPARE_COMMIT =&gt;
+571                    transactionsPendingForCompletion +=
+572                      new TransactionalIdCoordinatorEpochAndTransitMetadata(transactionalId, coordinatorEpoch, TransactionResult.COMMIT, txnMetadata, txnMetadata.prepareComplete(time.milliseconds()))
+573                  case _ =&gt;
+574                  // nothing needs to be done
+575                }
+576              })
+577            })
+578
+579            // we first remove the partition from loading partition then send out the markers for those pending to be
+580            // completed transactions, so that when the markers get sent the attempt of appending the complete transaction
+581            // log would not be blocked by the coordinator loading error
+582            loadingPartitions.remove(partitionAndLeaderEpoch)
+583
+584            transactionsPendingForCompletion.foreach { txnTransitMetadata =&gt;
+585              info(s&quot;Sending txn markers for $txnTransitMetadata after loading partition $partitionId&quot;)
+586              sendTxnMarkers(txnTransitMetadata.coordinatorEpoch, txnTransitMetadata.result,
+587                txnTransitMetadata.txnMetadata, txnTransitMetadata.transitMetadata)
+588            }
+589          }</code></pre></details>
+<details class="code" id="ev-local-validation"><summary>local-validation · GroupCoordinatorService.java:825</summary><p class="path">group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 825-849</p><pre><code>825      public CompletableFuture&lt;Errors&gt; validateShareGroupMember(
+826          AuthorizableRequestContext context,
+827          String groupId,
+828          String memberId,
+829          int memberEpoch
+830      ) {
+831          if (!isActive.get()) {
+832              return CompletableFuture.completedFuture(Errors.COORDINATOR_NOT_AVAILABLE);
+833          }
+834
+835          if (groupId == null || groupId.isEmpty() || memberId == null || memberId.isEmpty()) {
+836              return CompletableFuture.completedFuture(Errors.INVALID_REQUEST);
+837          }
+838
+839          return runtime.scheduleReadOperation(
+840              &quot;validate-share-group-member&quot;,
+841              topicPartitionFor(groupId),
+842              (coordinator, lastCommittedOffset) -&gt; coordinator.validateShareGroupMember(groupId, memberId, memberEpoch)
+843          ).exceptionally(exception -&gt; handleOperationException(
+844              &quot;validate-share-group-member&quot;,
+845              groupId,
+846              exception,
+847              (error, message) -&gt; error,
+848              log
+849          ));</code></pre></details>
+<details class="code" id="ev-runtime-owner"><summary>runtime-owner · CoordinatorRuntime.java:2064</summary><p class="path">coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime/CoordinatorRuntime.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 2064-2105</p><pre><code>2064       * Package private for testing.
+2065       */
+2066      CoordinatorContext contextOrThrow(TopicPartition tp) throws NotCoordinatorException {
+2067          CoordinatorContext context = coordinators.get(tp);
+2068
+2069          if (context == null) {
+2070              throw Errors.NOT_COORDINATOR.exception();
+2071          } else {
+2072              return context;
+2073          }
+2074      }
+2075
+2076      /**
+2077       * Calls the provided function with the context iff the context is active; throws
+2078       * an exception otherwise. This method ensures that the context lock is acquired
+2079       * before calling the function and releases afterwards.
+2080       *
+2081       * @param tp    The topic partition.
+2082       * @param func  The function that will receive the context.
+2083       * @throws NotCoordinatorException
+2084       * @throws CoordinatorLoadInProgressException
+2085       */
+2086      private void withActiveContextOrThrow(
+2087          TopicPartition tp,
+2088          Consumer&lt;CoordinatorContext&gt; func
+2089      ) throws NotCoordinatorException, CoordinatorLoadInProgressException {
+2090          CoordinatorContext context = contextOrThrow(tp);
+2091
+2092          try {
+2093              context.lock.lock();
+2094              if (context.state == CoordinatorState.ACTIVE) {
+2095                  func.accept(context);
+2096              } else if (context.state == CoordinatorState.LOADING) {
+2097                  throw Errors.COORDINATOR_LOAD_IN_PROGRESS.exception();
+2098              } else {
+2099                  throw Errors.NOT_COORDINATOR.exception();
+2100              }
+2101          } finally {
+2102              context.lock.unlock();
+2103          }
+2104      }
+2105</code></pre></details>
+<details class="code" id="ev-test-share"><summary>test-share · ShareCoordinatorShardTest.java:2460</summary><p class="path">share-coordinator/src/test/java/org/apache/kafka/coordinator/share/ShareCoordinatorShardTest.java · local revision 3b9b4a4b3844122da8d9bd0c2d36d981524a6e86 · lines 2460-2557</p><pre><code>2460      @Test
+2461      public void testCompleteTransactionCommitAcceptMatchesTransactionV2BumpedProducerEpoch() {
+2462          replayPendingShareState(ACKNOWLEDGE_TYPE_ACCEPT, DELIVERY_STATE_ACKNOWLEDGED, PRODUCER_EPOCH);
+2463
+2464          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; result = shard.completeTransaction(
+2465              PRODUCER_ID,
+2466              (short) (PRODUCER_EPOCH + 1),
+2467              TransactionResult.COMMIT,
+2468              TransactionVersion.TV_2.featureLevel()
+2469          );
+2470
+2471          assertEquals(1, result.records().size());
+2472          assertEquals(Set.of(SHARE_PARTITION_KEY), result.response());
+2473          ShareGroupOffset offset = groupOffset(result.records().get(0).value().message());
+2474          assertEquals(List.of(new PersisterStateBatch(10, 12, DELIVERY_STATE_ACKNOWLEDGED, (short) 1)), offset.stateBatches());
+2475          assertEquals(3, offset.deliveryCompleteCount());
+2476      }
+2477
+2478      @Test
+2479      public void testCompleteTransactionCommitRejectPreservesStagedArchivingState() {
+2480          replayPendingShareState(ACKNOWLEDGE_TYPE_REJECT, DELIVERY_STATE_ARCHIVING, PRODUCER_EPOCH);
+2481
+2482          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; result = shard.completeTransaction(
+2483              PRODUCER_ID,
+2484              PRODUCER_EPOCH,
+2485              TransactionResult.COMMIT
+2486          );
+2487
+2488          assertEquals(1, result.records().size());
+2489          assertEquals(Set.of(SHARE_PARTITION_KEY), result.response());
+2490          ShareGroupOffset offset = groupOffset(result.records().get(0).value().message());
+2491          assertEquals(List.of(new PersisterStateBatch(10, 12, DELIVERY_STATE_ARCHIVING, (short) 1)), offset.stateBatches());
+2492          assertEquals(0, offset.deliveryCompleteCount());
+2493      }
+2494
+2495      @Test
+2496      public void testCompleteTransactionAbortMakesPendingAckAvailable() {
+2497          replayPendingShareState(ACKNOWLEDGE_TYPE_ACCEPT, DELIVERY_STATE_ACKNOWLEDGED, PRODUCER_EPOCH);
+2498
+2499          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; result = shard.completeTransaction(
+2500              PRODUCER_ID,
+2501              PRODUCER_EPOCH,
+2502              TransactionResult.ABORT
+2503          );
+2504
+2505          assertEquals(1, result.records().size());
+2506          assertEquals(Set.of(SHARE_PARTITION_KEY), result.response());
+2507          ShareGroupOffset offset = groupOffset(result.records().get(0).value().message());
+2508          assertEquals(List.of(new PersisterStateBatch(10, 12, DELIVERY_STATE_AVAILABLE, (short) 1)), offset.stateBatches());
+2509          assertEquals(0, offset.deliveryCompleteCount());
+2510      }
+2511
+2512      @Test
+2513      public void testCompleteTransactionDuplicateMarkerIsIdempotent() {
+2514          replayPendingShareState(ACKNOWLEDGE_TYPE_ACCEPT, DELIVERY_STATE_ACKNOWLEDGED, PRODUCER_EPOCH);
+2515          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; firstResult = shard.completeTransaction(
+2516              PRODUCER_ID,
+2517              PRODUCER_EPOCH,
+2518              TransactionResult.COMMIT
+2519          );
+2520          shard.replay(1L, PRODUCER_ID, PRODUCER_EPOCH, firstResult.records().get(0));
+2521
+2522          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; duplicateResult = shard.completeTransaction(
+2523              PRODUCER_ID,
+2524              PRODUCER_EPOCH,
+2525              TransactionResult.COMMIT
+2526          );
+2527
+2528          assertTrue(duplicateResult.records().isEmpty());
+2529          assertTrue(duplicateResult.response().isEmpty());
+2530      }
+2531
+2532      @Test
+2533      public void testCompleteTransactionStaleProducerEpochDoesNotMutatePendingAck() {
+2534          replayPendingShareState(ACKNOWLEDGE_TYPE_ACCEPT, DELIVERY_STATE_ACKNOWLEDGED, PRODUCER_EPOCH);
+2535
+2536          CoordinatorResult&lt;Set&lt;SharePartitionKey&gt;, CoordinatorRecord&gt; result = shard.completeTransaction(
+2537              PRODUCER_ID,
+2538              (short) (PRODUCER_EPOCH - 1),
+2539              TransactionResult.COMMIT
+2540          );
+2541
+2542          assertTrue(result.records().isEmpty());
+2543          assertTrue(result.response().isEmpty());
+2544          assertEquals(
+2545              List.of(new PersisterStateBatch(
+2546                  10,
+2547                  12,
+2548                  DELIVERY_STATE_TX_PENDING,
+2549                  (short) 1,
+2550                  PRODUCER_ID,
+2551                  PRODUCER_EPOCH,
+2552                  ACKNOWLEDGE_TYPE_ACCEPT,
+2553                  DELIVERY_STATE_ACKNOWLEDGED
+2554              )),
+2555              shard.getShareStateMapValue(SHARE_PARTITION_KEY).stateBatches()
+2556          );
+2557      }</code></pre></details>
+</section>
+<footer><a href="kafka-transaction-marker-recovery.html">Ordinary transaction markers</a><a href="kafka-group-share-coordinators.html">Group and share coordinators</a></footer></main></div></body></html>
