@@ -1,3 +1,8 @@
+const readingPathNav = document.createElement('a');
+readingPathNav.href = 'reading-paths.html';
+readingPathNav.dataset.nav = 'reading-paths.html';
+readingPathNav.textContent = 'Reading paths and terms';
+document.querySelector('.sidebar nav')?.prepend(readingPathNav);
 const shareTransactionNav = document.createElement('a');
 shareTransactionNav.href = 'kafka-share-transactions-multi-broker.html';
 shareTransactionNav.dataset.nav = 'kafka-share-transactions-multi-broker.html';

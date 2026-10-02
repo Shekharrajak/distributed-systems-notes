@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {addReadingGuide} from './reading-guides.mjs';
 
 const repositories=new Set(['Kafka','flink','flink-connector-kafka','spark','iceberg','datafusion','datafusion-iceberg','datafusion-comet','arrow-rs']);
 export function isSiteFile(file){
@@ -74,7 +75,7 @@ export function buildSite(repository){
     const to=path.join(output,file);
     if(!fs.lstatSync(from).isFile())throw Error(`Expected a regular file: ${file}`);
     fs.mkdirSync(path.dirname(to),{recursive:true});
-    if(file.endsWith('.html'))fs.writeFileSync(to,publicSourceLinks(fs.readFileSync(from,'utf8'),revisions));
+    if(file.endsWith('.html'))fs.writeFileSync(to,publicSourceLinks(addReadingGuide(fs.readFileSync(from,'utf8'),file),revisions));
     else fs.copyFileSync(from,to);
   }
   fs.writeFileSync(path.join(output,'.nojekyll'),'');
