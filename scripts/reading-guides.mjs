@@ -1,6 +1,24 @@
 const guide = (gap, model, example, steps, check, answer) => ({gap, model, example, steps, check, answer});
 
 export const readingGuides = {
+ 'comet-iceberg-columnar.html': guide(
+  'Columnar representation, native language and distributed execution are often treated as one property.',
+  'Spark owns distributed work; Iceberg defines table contents; Comet executes eligible Arrow-based fragments inside executor processes.',
+  'An Iceberg scan can feed native filter and aggregate operators, then convert to rows only for a Spark consumer. An unsupported interior operator can introduce additional conversions.',
+  [['Plan the files','#ev-iceberg-exec','Per-partition scan data comes from Iceberg planning.'],['Run a native fragment','#ev-exec-rdd','A Spark task creates its native execution context.'],['Cross a row boundary','#ev-comet-c2r','ColumnarToRow changes representation, not process or durability.']],
+  'Does a final ColumnarToRow mean the whole query ran as rows?', 'No. Read the interior tree and exchange implementation; the final consumer can be row-oriented after a columnar pipeline.'),
+ 'comet-shuffle-joins.html': guide(
+  'Join algorithm, distribution and shuffle format need separate explanations.',
+  'Exchange co-locates keys; sort orders them; hash or merge finds matches. Spark transports partitions even when Comet computes natively.',
+  'Q3 first joins by customer key, then by order key. A partitioning that served the first join may need replacement before the second.',
+  [['Enforce input requirements','#ev-spark-requirements','Distribution and ordering are separate requirements.'],['Write native shuffle','#ev-native-writer','Native compute publishes output through Spark shuffle machinery.'],['Build native joins','#ev-native-joins','The Rust planner preserves join type, keys and null semantics.']],
+  'Does threshold −1 guarantee no broadcast?', 'No. Q16 retains a null-aware anti-join broadcast; semantic special cases and hints differ from ordinary size-based selection.'),
+ 'comet-tpch-plan-atlas.html': guide(
+  'A simplified diagram can hide keys, residuals, scalar subqueries and reused exchanges.',
+  'Use the captured tree for topology and the numbered operator blocks for exact semantics. Plans are fixture- and configuration-specific.',
+  'Compare Q3 in normal and threshold −1 modes, then check Q16 for the broadcast exception. These captures did not execute query results.',
+  [['Trace Q3','#q3','Compare four actual trees.'],['Check the exception','#q16','Inspect the anti-join in threshold −1 mode.'],['Read operator contracts','comet-iceberg-columnar.html#operators','Connect node labels to representation and distribution requirements.']],
+  'Does successful EXPLAIN prove correctness or speed?', 'No. Execution, paired result validation and runtime metrics are separate evidence.'),
  'index.html': guide(
   'Several entry-point lists compete before the reader knows which runtime to follow.',
   'Choose one processing route first. Kafka is the input log; Streams, Connect, Flink and Spark are different ways to do work; each destination has its own publication rule.',

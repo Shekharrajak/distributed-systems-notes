@@ -1,0 +1,166 @@
+== Physical Plan ==
+* Sort (19)
++- Exchange (18)
+   +- * Project (17)
+      +- * SortMergeJoin Inner (16)
+         :- * Sort (5)
+         :  +- Exchange (4)
+         :     +- * Filter (3)
+         :        +- * ColumnarToRow (2)
+         :           +- BatchScan local.tpch.supplier (1)
+         +- * Sort (15)
+            +- * Project (14)
+               +- * Filter (13)
+                  +- * HashAggregate (12)
+                     +- Exchange (11)
+                        +- * HashAggregate (10)
+                           +- * Project (9)
+                              +- * Filter (8)
+                                 +- * ColumnarToRow (7)
+                                    +- BatchScan local.tpch.lineitem (6)
+
+
+(1) BatchScan local.tpch.supplier
+Output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+local.tpch.supplier (branch=null) [filters=s_suppkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 1]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+
+(3) Filter [codegen id : 1]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Condition : isnotnull(s_suppkey#108L)
+
+(4) Exchange
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Arguments: hashpartitioning(s_suppkey#108L, 8), ENSURE_REQUIREMENTS, [plan_id=8912]
+
+(5) Sort [codegen id : 2]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Arguments: [s_suppkey#108L ASC NULLS FIRST], false, 0
+
+(6) BatchScan local.tpch.lineitem
+Output [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, l_suppkey IS NOT NULL, groupedBy=]
+
+(7) ColumnarToRow [codegen id : 3]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(8) Filter [codegen id : 3]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_suppkey#18L)
+
+(9) Project [codegen id : 3]
+Output [3]: [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(10) HashAggregate [codegen id : 3]
+Input [3]: [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [2]: [sum#1646, isEmpty#1647]
+Results [3]: [l_suppkey#18L, sum#1648, isEmpty#1649]
+
+(11) Exchange
+Input [3]: [l_suppkey#18L, sum#1648, isEmpty#1649]
+Arguments: hashpartitioning(l_suppkey#18L, 8), ENSURE_REQUIREMENTS, [plan_id=8923]
+
+(12) HashAggregate [codegen id : 4]
+Input [3]: [l_suppkey#18L, sum#1648, isEmpty#1649]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))#1605]
+Results [2]: [l_suppkey#18L, sum((l_extendedprice#21 * (1 - l_discount#22)))#1605 AS sum((l_extendedprice * (1 - l_discount)))#1606]
+
+(13) Filter [codegen id : 4]
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#1606]
+Condition : (isnotnull(sum((l_extendedprice * (1 - l_discount)))#1606) AND (sum((l_extendedprice * (1 - l_discount)))#1606 = Subquery scalar-subquery#1602, [id=#8868]))
+
+(14) Project [codegen id : 4]
+Output [2]: [l_suppkey#18L AS supplier_no#1603L, sum((l_extendedprice * (1 - l_discount)))#1606 AS total_revenue#1604]
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#1606]
+
+(15) Sort [codegen id : 4]
+Input [2]: [supplier_no#1603L, total_revenue#1604]
+Arguments: [supplier_no#1603L ASC NULLS FIRST], false, 0
+
+(16) SortMergeJoin [codegen id : 5]
+Left keys [1]: [s_suppkey#108L]
+Right keys [1]: [supplier_no#1603L]
+Join type: Inner
+Join condition: None
+
+(17) Project [codegen id : 5]
+Output [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#1604]
+Input [6]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, supplier_no#1603L, total_revenue#1604]
+
+(18) Exchange
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#1604]
+Arguments: rangepartitioning(s_suppkey#108L ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=8934]
+
+(19) Sort [codegen id : 6]
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#1604]
+Arguments: [s_suppkey#108L ASC NULLS FIRST], true, 0
+
+===== Subqueries =====
+
+Subquery:1 Hosting operator id = 13 Hosting Expression = Subquery scalar-subquery#1602, [id=#8868]
+* HashAggregate (28)
++- Exchange (27)
+   +- * HashAggregate (26)
+      +- * HashAggregate (25)
+         +- Exchange (24)
+            +- * HashAggregate (23)
+               +- * Project (22)
+                  +- * ColumnarToRow (21)
+                     +- BatchScan local.tpch.lineitem (20)
+
+
+(20) BatchScan local.tpch.lineitem
+Output [4]: [l_suppkey#1615L, l_extendedprice#1618, l_discount#1619, l_shipdate#1623]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, groupedBy=]
+
+(21) ColumnarToRow [codegen id : 1]
+Input [4]: [l_suppkey#1615L, l_extendedprice#1618, l_discount#1619, l_shipdate#1623]
+
+(22) Project [codegen id : 1]
+Output [3]: [l_suppkey#1615L, l_extendedprice#1618, l_discount#1619]
+Input [4]: [l_suppkey#1615L, l_extendedprice#1618, l_discount#1619, l_shipdate#1623]
+
+(23) HashAggregate [codegen id : 1]
+Input [3]: [l_suppkey#1615L, l_extendedprice#1618, l_discount#1619]
+Keys [1]: [l_suppkey#1615L]
+Functions [1]: [partial_sum((l_extendedprice#1618 * (1 - l_discount#1619)))]
+Aggregate Attributes [2]: [sum#1652, isEmpty#1653]
+Results [3]: [l_suppkey#1615L, sum#1654, isEmpty#1655]
+
+(24) Exchange
+Input [3]: [l_suppkey#1615L, sum#1654, isEmpty#1655]
+Arguments: hashpartitioning(l_suppkey#1615L, 8), ENSURE_REQUIREMENTS, [plan_id=8859]
+
+(25) HashAggregate [codegen id : 2]
+Input [3]: [l_suppkey#1615L, sum#1654, isEmpty#1655]
+Keys [1]: [l_suppkey#1615L]
+Functions [1]: [sum((l_extendedprice#1618 * (1 - l_discount#1619)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#1618 * (1 - l_discount#1619)))#1609]
+Results [1]: [sum((l_extendedprice#1618 * (1 - l_discount#1619)))#1609 AS total_revenue#1608]
+
+(26) HashAggregate [codegen id : 2]
+Input [1]: [total_revenue#1608]
+Keys: []
+Functions [1]: [partial_max(total_revenue#1608)]
+Aggregate Attributes [1]: [max#1650]
+Results [1]: [max#1651]
+
+(27) Exchange
+Input [1]: [max#1651]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=8864]
+
+(28) HashAggregate [codegen id : 3]
+Input [1]: [max#1651]
+Keys: []
+Functions [1]: [max(total_revenue#1608)]
+Aggregate Attributes [1]: [max(total_revenue#1608)#1611]
+Results [1]: [max(total_revenue#1608)#1611 AS max(total_revenue)#1612]
+
+

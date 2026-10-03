@@ -1,0 +1,80 @@
+== Physical Plan ==
+* CometColumnarToRow (15)
++- CometHashAggregate (14)
+   +- CometExchange (13)
+      +- CometHashAggregate (12)
+         +- CometProject (11)
+            +- CometSortMergeJoin (10)
+               :- CometSort (5)
+               :  +- CometExchange (4)
+               :     +- CometProject (3)
+               :        +- CometFilter (2)
+               :           +- CometIcebergNativeScan (1)
+               +- CometSort (9)
+                  +- CometExchange (8)
+                     +- CometFilter (7)
+                        +- CometIcebergNativeScan (6)
+
+
+(1) CometIcebergNativeScan
+Output [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9162, l_shipdate < 9190, l_partkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_partkey#17L)
+
+(3) CometProject
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22], [l_partkey#17L, l_extendedprice#21, l_discount#22]
+
+(4) CometExchange
+Input [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Arguments: hashpartitioning(l_partkey#17L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=11460]
+
+(5) CometSort
+Input [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22], [l_partkey#17L ASC NULLS FIRST]
+
+(6) CometIcebergNativeScan
+Output [2]: [p_partkey#74L, p_type#78]
+Arguments: [p_partkey#74L, p_type#78], /private/tmp/comet-iceberg-demo/warehouse/tpch/part/metadata/v1.metadata.json, local.tpch.part (branch=null) [filters=p_partkey IS NOT NULL, groupedBy=], 1
+
+(7) CometFilter
+Input [2]: [p_partkey#74L, p_type#78]
+Condition : isnotnull(p_partkey#74L)
+
+(8) CometExchange
+Input [2]: [p_partkey#74L, p_type#78]
+Arguments: hashpartitioning(p_partkey#74L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=11464]
+
+(9) CometSort
+Input [2]: [p_partkey#74L, p_type#78]
+Arguments: [p_partkey#74L, p_type#78], [p_partkey#74L ASC NULLS FIRST]
+
+(10) CometSortMergeJoin
+Left output [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Right output [2]: [p_partkey#74L, p_type#78]
+Arguments: [l_partkey#17L], [p_partkey#74L], Inner
+
+(11) CometProject
+Input [5]: [l_partkey#17L, l_extendedprice#21, l_discount#22, p_partkey#74L, p_type#78]
+Arguments: [l_extendedprice#21, l_discount#22, p_type#78], [l_extendedprice#21, l_discount#22, p_type#78]
+
+(12) CometHashAggregate
+Input [3]: [l_extendedprice#21, l_discount#22, p_type#78]
+Keys: []
+Functions [2]: [partial_sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(13) CometExchange
+Input [4]: [sum#1324, isEmpty#1325, sum#1326, isEmpty#1327]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=11469]
+
+(14) CometHashAggregate
+Input [4]: [sum#1324, isEmpty#1325, sum#1326, isEmpty#1327]
+Keys: []
+Functions [2]: [sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(15) CometColumnarToRow [codegen id : 1]
+Input [1]: [promo_revenue#1310]
+

@@ -1,0 +1,146 @@
+== Physical Plan ==
+* Sort (26)
++- Exchange (25)
+   +- * HashAggregate (24)
+      +- Exchange (23)
+         +- * HashAggregate (22)
+            +- * HashAggregate (21)
+               +- Exchange (20)
+                  +- * HashAggregate (19)
+                     +- * Project (18)
+                        +- * SortMergeJoin Inner (17)
+                           :- * Sort (11)
+                           :  +- Exchange (10)
+                           :     +- * BroadcastHashJoin LeftAnti BuildRight (9)
+                           :        :- * Filter (3)
+                           :        :  +- * ColumnarToRow (2)
+                           :        :     +- BatchScan local.tpch.partsupp (1)
+                           :        +- BroadcastExchange (8)
+                           :           +- * Project (7)
+                           :              +- * Filter (6)
+                           :                 +- * ColumnarToRow (5)
+                           :                    +- BatchScan local.tpch.supplier (4)
+                           +- * Sort (16)
+                              +- Exchange (15)
+                                 +- * Filter (14)
+                                    +- * ColumnarToRow (13)
+                                       +- BatchScan local.tpch.part (12)
+
+
+(1) BatchScan local.tpch.partsupp
+Output [2]: [ps_partkey#92L, ps_suppkey#93L]
+local.tpch.partsupp (branch=null) [filters=ps_partkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 2]
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+
+(3) Filter [codegen id : 2]
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Condition : isnotnull(ps_partkey#92L)
+
+(4) BatchScan local.tpch.supplier
+Output [2]: [s_suppkey#108L, s_comment#114]
+local.tpch.supplier (branch=null) [filters=s_comment IS NOT NULL, groupedBy=]
+
+(5) ColumnarToRow [codegen id : 1]
+Input [2]: [s_suppkey#108L, s_comment#114]
+
+(6) Filter [codegen id : 1]
+Input [2]: [s_suppkey#108L, s_comment#114]
+Condition : (isnotnull(s_comment#114) AND s_comment#114 LIKE %Customer%Complaints%)
+
+(7) Project [codegen id : 1]
+Output [1]: [s_suppkey#108L]
+Input [2]: [s_suppkey#108L, s_comment#114]
+
+(8) BroadcastExchange
+Input [1]: [s_suppkey#108L]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),true), [plan_id=9112]
+
+(9) BroadcastHashJoin [codegen id : 2]
+Left keys [1]: [ps_suppkey#93L]
+Right keys [1]: [s_suppkey#108L]
+Join type: LeftAnti
+Join condition: None
+
+(10) Exchange
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Arguments: hashpartitioning(ps_partkey#92L, 8), ENSURE_REQUIREMENTS, [plan_id=9116]
+
+(11) Sort [codegen id : 3]
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Arguments: [ps_partkey#92L ASC NULLS FIRST], false, 0
+
+(12) BatchScan local.tpch.part
+Output [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+local.tpch.part (branch=null) [filters=p_brand IS NOT NULL, p_type IS NOT NULL, NOT (p_brand = 'Brand#14'), NOT (p_type LIKE 'SMALL PLATED%'), p_size IN (14, 6, 5, 31, 49, 15, 41, 47), p_partkey IS NOT NULL, groupedBy=]
+
+(13) ColumnarToRow [codegen id : 4]
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+
+(14) Filter [codegen id : 4]
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Condition : (((((isnotnull(p_brand#77) AND isnotnull(p_type#78)) AND NOT (p_brand#77 = Brand#14)) AND NOT StartsWith(p_type#78, SMALL PLATED)) AND p_size#79 IN (14,6,5,31,49,15,41,47)) AND isnotnull(p_partkey#74L))
+
+(15) Exchange
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: hashpartitioning(p_partkey#74L, 8), ENSURE_REQUIREMENTS, [plan_id=9125]
+
+(16) Sort [codegen id : 5]
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: [p_partkey#74L ASC NULLS FIRST], false, 0
+
+(17) SortMergeJoin [codegen id : 6]
+Left keys [1]: [ps_partkey#92L]
+Right keys [1]: [p_partkey#74L]
+Join type: Inner
+Join condition: None
+
+(18) Project [codegen id : 6]
+Output [4]: [ps_suppkey#93L, p_brand#77, p_type#78, p_size#79]
+Input [6]: [ps_partkey#92L, ps_suppkey#93L, p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+
+(19) HashAggregate [codegen id : 6]
+Input [4]: [ps_suppkey#93L, p_brand#77, p_type#78, p_size#79]
+Keys [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Functions: []
+Aggregate Attributes: []
+Results [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+
+(20) Exchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Arguments: hashpartitioning(p_brand#77, p_type#78, p_size#79, ps_suppkey#93L, 8), ENSURE_REQUIREMENTS, [plan_id=9134]
+
+(21) HashAggregate [codegen id : 7]
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Keys [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Functions: []
+Aggregate Attributes: []
+Results [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+
+(22) HashAggregate [codegen id : 7]
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Keys [3]: [p_brand#77, p_type#78, p_size#79]
+Functions [1]: [partial_count(distinct ps_suppkey#93L)]
+Aggregate Attributes [1]: [count(ps_suppkey#93L)#1677L]
+Results [4]: [p_brand#77, p_type#78, p_size#79, count#1692L]
+
+(23) Exchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, count#1692L]
+Arguments: hashpartitioning(p_brand#77, p_type#78, p_size#79, 8), ENSURE_REQUIREMENTS, [plan_id=9139]
+
+(24) HashAggregate [codegen id : 8]
+Input [4]: [p_brand#77, p_type#78, p_size#79, count#1692L]
+Keys [3]: [p_brand#77, p_type#78, p_size#79]
+Functions [1]: [count(distinct ps_suppkey#93L)]
+Aggregate Attributes [1]: [count(ps_suppkey#93L)#1677L]
+Results [4]: [p_brand#77, p_type#78, p_size#79, count(ps_suppkey#93L)#1677L AS supplier_cnt#1675L]
+
+(25) Exchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1675L]
+Arguments: rangepartitioning(supplier_cnt#1675L DESC NULLS LAST, p_brand#77 ASC NULLS FIRST, p_type#78 ASC NULLS FIRST, p_size#79 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=9143]
+
+(26) Sort [codegen id : 9]
+Input [4]: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1675L]
+Arguments: [supplier_cnt#1675L DESC NULLS LAST, p_brand#77 ASC NULLS FIRST, p_type#78 ASC NULLS FIRST, p_size#79 ASC NULLS FIRST], true, 0
+

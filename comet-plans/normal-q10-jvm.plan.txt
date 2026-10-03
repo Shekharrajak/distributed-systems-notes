@@ -1,0 +1,146 @@
+== Physical Plan ==
+TakeOrderedAndProject (27)
++- * HashAggregate (26)
+   +- Exchange (25)
+      +- * HashAggregate (24)
+         +- * Project (23)
+            +- * BroadcastHashJoin Inner BuildRight (22)
+               :- * Project (17)
+               :  +- * BroadcastHashJoin Inner BuildRight (16)
+               :     :- * Project (10)
+               :     :  +- * BroadcastHashJoin Inner BuildRight (9)
+               :     :     :- * Filter (3)
+               :     :     :  +- * ColumnarToRow (2)
+               :     :     :     +- BatchScan local.tpch.customer (1)
+               :     :     +- BroadcastExchange (8)
+               :     :        +- * Project (7)
+               :     :           +- * Filter (6)
+               :     :              +- * ColumnarToRow (5)
+               :     :                 +- BatchScan local.tpch.orders (4)
+               :     +- BroadcastExchange (15)
+               :        +- * Project (14)
+               :           +- * Filter (13)
+               :              +- * ColumnarToRow (12)
+               :                 +- BatchScan local.tpch.lineitem (11)
+               +- BroadcastExchange (21)
+                  +- * Filter (20)
+                     +- * ColumnarToRow (19)
+                        +- BatchScan local.tpch.nation (18)
+
+
+(1) BatchScan local.tpch.customer
+Output [7]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7]
+local.tpch.customer (branch=null) [filters=c_custkey IS NOT NULL, c_nationkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 4]
+Input [7]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7]
+
+(3) Filter [codegen id : 4]
+Input [7]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7]
+Condition : (isnotnull(c_custkey#0L) AND isnotnull(c_nationkey#3L))
+
+(4) BatchScan local.tpch.orders
+Output [3]: [o_orderkey#56L, o_custkey#57L, o_orderdate#60]
+local.tpch.orders (branch=null) [filters=o_orderdate IS NOT NULL, o_orderdate >= 8582, o_orderdate < 8674, o_custkey IS NOT NULL, o_orderkey IS NOT NULL, groupedBy=]
+
+(5) ColumnarToRow [codegen id : 1]
+Input [3]: [o_orderkey#56L, o_custkey#57L, o_orderdate#60]
+
+(6) Filter [codegen id : 1]
+Input [3]: [o_orderkey#56L, o_custkey#57L, o_orderdate#60]
+Condition : (isnotnull(o_custkey#57L) AND isnotnull(o_orderkey#56L))
+
+(7) Project [codegen id : 1]
+Output [2]: [o_orderkey#56L, o_custkey#57L]
+Input [3]: [o_orderkey#56L, o_custkey#57L, o_orderdate#60]
+
+(8) BroadcastExchange
+Input [2]: [o_orderkey#56L, o_custkey#57L]
+Arguments: HashedRelationBroadcastMode(List(input[1, bigint, true]),false), [plan_id=2230]
+
+(9) BroadcastHashJoin [codegen id : 4]
+Left keys [1]: [c_custkey#0L]
+Right keys [1]: [o_custkey#57L]
+Join type: Inner
+Join condition: None
+
+(10) Project [codegen id : 4]
+Output [8]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7, o_orderkey#56L]
+Input [9]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7, o_orderkey#56L, o_custkey#57L]
+
+(11) BatchScan local.tpch.lineitem
+Output [4]: [l_orderkey#16L, l_extendedprice#21, l_discount#22, l_returnflag#24]
+local.tpch.lineitem (branch=null) [filters=l_returnflag IS NOT NULL, l_returnflag = 'R', l_orderkey IS NOT NULL, groupedBy=]
+
+(12) ColumnarToRow [codegen id : 2]
+Input [4]: [l_orderkey#16L, l_extendedprice#21, l_discount#22, l_returnflag#24]
+
+(13) Filter [codegen id : 2]
+Input [4]: [l_orderkey#16L, l_extendedprice#21, l_discount#22, l_returnflag#24]
+Condition : ((isnotnull(l_returnflag#24) AND (l_returnflag#24 = R)) AND isnotnull(l_orderkey#16L))
+
+(14) Project [codegen id : 2]
+Output [3]: [l_orderkey#16L, l_extendedprice#21, l_discount#22]
+Input [4]: [l_orderkey#16L, l_extendedprice#21, l_discount#22, l_returnflag#24]
+
+(15) BroadcastExchange
+Input [3]: [l_orderkey#16L, l_extendedprice#21, l_discount#22]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=2239]
+
+(16) BroadcastHashJoin [codegen id : 4]
+Left keys [1]: [o_orderkey#56L]
+Right keys [1]: [l_orderkey#16L]
+Join type: Inner
+Join condition: None
+
+(17) Project [codegen id : 4]
+Output [9]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7, l_extendedprice#21, l_discount#22]
+Input [11]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7, o_orderkey#56L, l_orderkey#16L, l_extendedprice#21, l_discount#22]
+
+(18) BatchScan local.tpch.nation
+Output [2]: [n_nationkey#48L, n_name#49]
+local.tpch.nation (branch=null) [filters=n_nationkey IS NOT NULL, groupedBy=]
+
+(19) ColumnarToRow [codegen id : 3]
+Input [2]: [n_nationkey#48L, n_name#49]
+
+(20) Filter [codegen id : 3]
+Input [2]: [n_nationkey#48L, n_name#49]
+Condition : isnotnull(n_nationkey#48L)
+
+(21) BroadcastExchange
+Input [2]: [n_nationkey#48L, n_name#49]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [plan_id=2247]
+
+(22) BroadcastHashJoin [codegen id : 4]
+Left keys [1]: [c_nationkey#3L]
+Right keys [1]: [n_nationkey#48L]
+Join type: Inner
+Join condition: None
+
+(23) Project [codegen id : 4]
+Output [9]: [c_custkey#0L, c_name#1, c_address#2, c_phone#4, c_acctbal#5, c_comment#7, l_extendedprice#21, l_discount#22, n_name#49]
+Input [11]: [c_custkey#0L, c_name#1, c_address#2, c_nationkey#3L, c_phone#4, c_acctbal#5, c_comment#7, l_extendedprice#21, l_discount#22, n_nationkey#48L, n_name#49]
+
+(24) HashAggregate [codegen id : 4]
+Input [9]: [c_custkey#0L, c_name#1, c_address#2, c_phone#4, c_acctbal#5, c_comment#7, l_extendedprice#21, l_discount#22, n_name#49]
+Keys [7]: [c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7]
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [2]: [sum#533, isEmpty#534]
+Results [9]: [c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7, sum#535, isEmpty#536]
+
+(25) Exchange
+Input [9]: [c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7, sum#535, isEmpty#536]
+Arguments: hashpartitioning(c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7, 8), ENSURE_REQUIREMENTS, [plan_id=2253]
+
+(26) HashAggregate [codegen id : 5]
+Input [9]: [c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7, sum#535, isEmpty#536]
+Keys [7]: [c_custkey#0L, c_name#1, c_acctbal#5, c_phone#4, n_name#49, c_address#2, c_comment#7]
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))#508]
+Results [8]: [c_custkey#0L, c_name#1, sum((l_extendedprice#21 * (1 - l_discount#22)))#508 AS revenue#507, c_acctbal#5, n_name#49, c_address#2, c_phone#4, c_comment#7]
+
+(27) TakeOrderedAndProject
+Input [8]: [c_custkey#0L, c_name#1, revenue#507, c_acctbal#5, n_name#49, c_address#2, c_phone#4, c_comment#7]
+Arguments: 20, [revenue#507 DESC NULLS LAST], [c_custkey#0L, c_name#1, revenue#507, c_acctbal#5, n_name#49, c_address#2, c_phone#4, c_comment#7]
+

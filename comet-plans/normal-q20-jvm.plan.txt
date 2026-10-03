@@ -1,0 +1,198 @@
+== Physical Plan ==
+* Sort (37)
++- Exchange (36)
+   +- * Project (35)
+      +- * BroadcastHashJoin Inner BuildRight (34)
+         :- * Project (28)
+         :  +- * BroadcastHashJoin LeftSemi BuildRight (27)
+         :     :- * Filter (3)
+         :     :  +- * ColumnarToRow (2)
+         :     :     +- BatchScan local.tpch.supplier (1)
+         :     +- BroadcastExchange (26)
+         :        +- * Project (25)
+         :           +- * BroadcastHashJoin Inner BuildLeft (24)
+         :              :- BroadcastExchange (13)
+         :              :  +- * BroadcastHashJoin LeftSemi BuildRight (12)
+         :              :     :- * Filter (6)
+         :              :     :  +- * ColumnarToRow (5)
+         :              :     :     +- BatchScan local.tpch.partsupp (4)
+         :              :     +- BroadcastExchange (11)
+         :              :        +- * Project (10)
+         :              :           +- * Filter (9)
+         :              :              +- * ColumnarToRow (8)
+         :              :                 +- BatchScan local.tpch.part (7)
+         :              +- * Filter (23)
+         :                 +- * HashAggregate (22)
+         :                    +- Exchange (21)
+         :                       +- * HashAggregate (20)
+         :                          +- * BroadcastHashJoin LeftSemi BuildRight (19)
+         :                             :- * Project (17)
+         :                             :  +- * Filter (16)
+         :                             :     +- * ColumnarToRow (15)
+         :                             :        +- BatchScan local.tpch.lineitem (14)
+         :                             +- ReusedExchange (18)
+         +- BroadcastExchange (33)
+            +- * Project (32)
+               +- * Filter (31)
+                  +- * ColumnarToRow (30)
+                     +- BatchScan local.tpch.nation (29)
+
+
+(1) BatchScan local.tpch.supplier
+Output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+local.tpch.supplier (branch=null) [filters=s_nationkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 7]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+
+(3) Filter [codegen id : 7]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+Condition : isnotnull(s_nationkey#111L)
+
+(4) BatchScan local.tpch.partsupp
+Output [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+local.tpch.partsupp (branch=null) [filters=ps_availqty IS NOT NULL, ps_partkey IS NOT NULL, ps_suppkey IS NOT NULL, groupedBy=]
+
+(5) ColumnarToRow [codegen id : 2]
+Input [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+
+(6) Filter [codegen id : 2]
+Input [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Condition : ((isnotnull(ps_availqty#94) AND isnotnull(ps_partkey#92L)) AND isnotnull(ps_suppkey#93L))
+
+(7) BatchScan local.tpch.part
+Output [2]: [p_partkey#74L, p_name#75]
+local.tpch.part (branch=null) [filters=p_name IS NOT NULL, p_name LIKE 'blanched%', groupedBy=]
+
+(8) ColumnarToRow [codegen id : 1]
+Input [2]: [p_partkey#74L, p_name#75]
+
+(9) Filter [codegen id : 1]
+Input [2]: [p_partkey#74L, p_name#75]
+Condition : (isnotnull(p_name#75) AND StartsWith(p_name#75, blanched))
+
+(10) Project [codegen id : 1]
+Output [1]: [p_partkey#74L]
+Input [2]: [p_partkey#74L, p_name#75]
+
+(11) BroadcastExchange
+Input [1]: [p_partkey#74L]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=4070]
+
+(12) BroadcastHashJoin [codegen id : 2]
+Left keys [1]: [ps_partkey#92L]
+Right keys [1]: [p_partkey#74L]
+Join type: LeftSemi
+Join condition: None
+
+(13) BroadcastExchange
+Input [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false], input[1, bigint, false]),false), [plan_id=4074]
+
+(14) BatchScan local.tpch.lineitem
+Output [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 8401, l_shipdate < 8766, groupedBy=]
+
+(15) ColumnarToRow [codegen id : 4]
+Input [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+
+(16) Filter [codegen id : 4]
+Input [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+Condition : (isnotnull(l_partkey#17L) AND isnotnull(l_suppkey#18L))
+
+(17) Project [codegen id : 4]
+Output [3]: [l_partkey#17L, l_suppkey#18L, l_quantity#20]
+Input [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+
+(18) ReusedExchange [Reuses operator id: 11]
+Output [1]: [p_partkey#74L]
+
+(19) BroadcastHashJoin [codegen id : 4]
+Left keys [1]: [l_partkey#17L]
+Right keys [1]: [p_partkey#74L]
+Join type: LeftSemi
+Join condition: None
+
+(20) HashAggregate [codegen id : 4]
+Input [3]: [l_partkey#17L, l_suppkey#18L, l_quantity#20]
+Keys [2]: [l_partkey#17L, l_suppkey#18L]
+Functions [1]: [partial_sum(l_quantity#20)]
+Aggregate Attributes [2]: [sum#910, isEmpty#911]
+Results [4]: [l_partkey#17L, l_suppkey#18L, sum#912, isEmpty#913]
+
+(21) Exchange
+Input [4]: [l_partkey#17L, l_suppkey#18L, sum#912, isEmpty#913]
+Arguments: hashpartitioning(l_partkey#17L, l_suppkey#18L, 8), ENSURE_REQUIREMENTS, [plan_id=4145]
+
+(22) HashAggregate
+Input [4]: [l_partkey#17L, l_suppkey#18L, sum#912, isEmpty#913]
+Keys [2]: [l_partkey#17L, l_suppkey#18L]
+Functions [1]: [sum(l_quantity#20)]
+Aggregate Attributes [1]: [sum(l_quantity#20)#891]
+Results [3]: [(0.5 * sum(l_quantity#20)#891) AS (0.5 * sum(l_quantity))#892, l_partkey#17L, l_suppkey#18L]
+
+(23) Filter
+Input [3]: [(0.5 * sum(l_quantity))#892, l_partkey#17L, l_suppkey#18L]
+Condition : isnotnull((0.5 * sum(l_quantity))#892)
+
+(24) BroadcastHashJoin [codegen id : 5]
+Left keys [2]: [ps_partkey#92L, ps_suppkey#93L]
+Right keys [2]: [l_partkey#17L, l_suppkey#18L]
+Join type: Inner
+Join condition: (cast(ps_availqty#94 as decimal(24,3)) > (0.5 * sum(l_quantity))#892)
+
+(25) Project [codegen id : 5]
+Output [1]: [ps_suppkey#93L]
+Input [6]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94, (0.5 * sum(l_quantity))#892, l_partkey#17L, l_suppkey#18L]
+
+(26) BroadcastExchange
+Input [1]: [ps_suppkey#93L]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=4166]
+
+(27) BroadcastHashJoin [codegen id : 7]
+Left keys [1]: [s_suppkey#108L]
+Right keys [1]: [ps_suppkey#93L]
+Join type: LeftSemi
+Join condition: None
+
+(28) Project [codegen id : 7]
+Output [3]: [s_name#109, s_address#110, s_nationkey#111L]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+
+(29) BatchScan local.tpch.nation
+Output [2]: [n_nationkey#48L, n_name#49]
+local.tpch.nation (branch=null) [filters=n_name IS NOT NULL, n_name = 'KENYA', n_nationkey IS NOT NULL, groupedBy=]
+
+(30) ColumnarToRow [codegen id : 6]
+Input [2]: [n_nationkey#48L, n_name#49]
+
+(31) Filter [codegen id : 6]
+Input [2]: [n_nationkey#48L, n_name#49]
+Condition : ((isnotnull(n_name#49) AND (n_name#49 = KENYA)) AND isnotnull(n_nationkey#48L))
+
+(32) Project [codegen id : 6]
+Output [1]: [n_nationkey#48L]
+Input [2]: [n_nationkey#48L, n_name#49]
+
+(33) BroadcastExchange
+Input [1]: [n_nationkey#48L]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=4106]
+
+(34) BroadcastHashJoin [codegen id : 7]
+Left keys [1]: [s_nationkey#111L]
+Right keys [1]: [n_nationkey#48L]
+Join type: Inner
+Join condition: None
+
+(35) Project [codegen id : 7]
+Output [2]: [s_name#109, s_address#110]
+Input [4]: [s_name#109, s_address#110, s_nationkey#111L, n_nationkey#48L]
+
+(36) Exchange
+Input [2]: [s_name#109, s_address#110]
+Arguments: rangepartitioning(s_name#109 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=4193]
+
+(37) Sort [codegen id : 8]
+Input [2]: [s_name#109, s_address#110]
+Arguments: [s_name#109 ASC NULLS FIRST], true, 0
+

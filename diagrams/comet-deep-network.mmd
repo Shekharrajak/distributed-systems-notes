@@ -1,0 +1,22 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":60,"messageMargin":42,"wrap":true,"width":160}}}%%
+sequenceDiagram
+box rgb(224,242,254) Driver
+ participant D as Scheduler / MapOutputTracker
+end
+box rgb(220,252,231) Map executor
+ participant M as Task / writer
+ participant B as Block server
+end
+box rgb(237,233,254) Reduce executor
+ participant R as Task / fetcher
+end
+D->>M: Launch map task
+M->>M: Write and publish data / index
+M-->>D: Task completion / MapStatus
+D->>R: Launch reduce task
+R->>D: Resolve map output locations when needed
+D-->>R: Addresses and block sizes
+R->>B: Fetch reduce-partition blocks
+B-->>R: Serialized row or Arrow shuffle bytes
+R->>R: Decode + join / aggregate
+R-->>D: Task completion

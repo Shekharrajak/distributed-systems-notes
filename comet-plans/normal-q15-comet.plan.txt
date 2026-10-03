@@ -1,0 +1,139 @@
+== Physical Plan ==
+* CometColumnarToRow (16)
++- CometSort (15)
+   +- CometExchange (14)
+      +- CometProject (13)
+         +- CometBroadcastHashJoin (12)
+            :- CometBroadcastExchange (3)
+            :  +- CometFilter (2)
+            :     +- CometIcebergNativeScan (1)
+            +- CometProject (11)
+               +- CometFilter (10)
+                  +- CometHashAggregate (9)
+                     +- CometExchange (8)
+                        +- CometHashAggregate (7)
+                           +- CometProject (6)
+                              +- CometFilter (5)
+                                 +- CometIcebergNativeScan (4)
+
+
+(1) CometIcebergNativeScan
+Output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Arguments: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112], /private/tmp/comet-iceberg-demo/warehouse/tpch/supplier/metadata/v1.metadata.json, local.tpch.supplier (branch=null) [filters=s_suppkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Condition : isnotnull(s_suppkey#108L)
+
+(3) CometBroadcastExchange
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Arguments: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+
+(4) CometIcebergNativeScan
+Output [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, l_suppkey IS NOT NULL, groupedBy=], 3
+
+(5) CometFilter
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_suppkey#18L)
+
+(6) CometProject
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_suppkey#18L, l_extendedprice#21, l_discount#22], [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+
+(7) CometHashAggregate
+Input [3]: [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(8) CometExchange
+Input [3]: [l_suppkey#18L, sum#607, isEmpty#608]
+Arguments: hashpartitioning(l_suppkey#18L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=4144]
+
+(9) CometHashAggregate
+Input [3]: [l_suppkey#18L, sum#607, isEmpty#608]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(10) CometFilter
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#565]
+Condition : (isnotnull(sum((l_extendedprice * (1 - l_discount)))#565) AND (sum((l_extendedprice * (1 - l_discount)))#565 = Subquery scalar-subquery#561, [id=#4056]))
+
+(11) CometProject
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#565]
+Arguments: [supplier_no#562L, total_revenue#563], [l_suppkey#18L AS supplier_no#562L, sum((l_extendedprice * (1 - l_discount)))#565 AS total_revenue#563]
+
+(12) CometBroadcastHashJoin
+Left output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Right output [2]: [supplier_no#562L, total_revenue#563]
+Arguments: [s_suppkey#108L], [supplier_no#562L], Inner, BuildLeft
+
+(13) CometProject
+Input [6]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, supplier_no#562L, total_revenue#563]
+Arguments: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563], [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563]
+
+(14) CometExchange
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563]
+Arguments: rangepartitioning(s_suppkey#108L ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=4150]
+
+(15) CometSort
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563]
+Arguments: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563], [s_suppkey#108L ASC NULLS FIRST]
+
+(16) CometColumnarToRow [codegen id : 1]
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#563]
+
+===== Subqueries =====
+
+Subquery:1 Hosting operator id = 10 Hosting Expression = Subquery scalar-subquery#561, [id=#4056]
+* CometColumnarToRow (25)
++- CometHashAggregate (24)
+   +- CometExchange (23)
+      +- CometHashAggregate (22)
+         +- CometHashAggregate (21)
+            +- CometExchange (20)
+               +- CometHashAggregate (19)
+                  +- CometProject (18)
+                     +- CometIcebergNativeScan (17)
+
+
+(17) CometIcebergNativeScan
+Output [4]: [l_suppkey#574L, l_extendedprice#577, l_discount#578, l_shipdate#582]
+Arguments: [l_suppkey#574L, l_extendedprice#577, l_discount#578, l_shipdate#582], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, groupedBy=], 3
+
+(18) CometProject
+Input [4]: [l_suppkey#574L, l_extendedprice#577, l_discount#578, l_shipdate#582]
+Arguments: [l_suppkey#574L, l_extendedprice#577, l_discount#578], [l_suppkey#574L, l_extendedprice#577, l_discount#578]
+
+(19) CometHashAggregate
+Input [3]: [l_suppkey#574L, l_extendedprice#577, l_discount#578]
+Keys [1]: [l_suppkey#574L]
+Functions [1]: [partial_sum((l_extendedprice#577 * (1 - l_discount#578)))]
+
+(20) CometExchange
+Input [3]: [l_suppkey#574L, sum#613, isEmpty#614]
+Arguments: hashpartitioning(l_suppkey#574L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=4046]
+
+(21) CometHashAggregate
+Input [3]: [l_suppkey#574L, sum#613, isEmpty#614]
+Keys [1]: [l_suppkey#574L]
+Functions [1]: [sum((l_extendedprice#577 * (1 - l_discount#578)))]
+
+(22) CometHashAggregate
+Input [1]: [total_revenue#567]
+Keys: []
+Functions [1]: [partial_max(total_revenue#567)]
+
+(23) CometExchange
+Input [1]: [max#610]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=4049]
+
+(24) CometHashAggregate
+Input [1]: [max#610]
+Keys: []
+Functions [1]: [max(total_revenue#567)]
+
+(25) CometColumnarToRow [codegen id : 1]
+Input [1]: [max(total_revenue)#571]
+
+

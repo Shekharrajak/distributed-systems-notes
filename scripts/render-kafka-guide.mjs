@@ -5,11 +5,13 @@ import {diagrams as rpcDiagrams} from './kafka-guide-diagrams.mjs';
 import {diagrams as recoveryDiagrams} from './kafka-recovery-diagrams.mjs';
 import {diagrams as offsetDiagrams} from './kafka-offset-diagrams.mjs';
 import {diagrams as sparkDiagrams} from './spark-guide-diagrams.mjs';
+import {diagrams as cometDiagrams} from './comet-diagrams.mjs';
 
 const recovery=process.argv.includes('--recovery');
 const offsets=process.argv.includes('--offsets');
 const spark=process.argv.includes('--spark');
-const diagrams=spark?sparkDiagrams:offsets?offsetDiagrams:recovery?recoveryDiagrams:rpcDiagrams;
+const comet=process.argv.includes('--comet');
+const diagrams=comet?cometDiagrams:spark?sparkDiagrams:offsets?offsetDiagrams:recovery?recoveryDiagrams:rpcDiagrams;
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const {default:puppeteer}=await import(process.env.GUIDE_PUPPETEER_MODULE||'puppeteer');
@@ -48,7 +50,7 @@ try{
     results.push(result);console.log(JSON.stringify(result));
   }
 }finally{await browser.close();}
-const file=path.join(root,spark?'spark-guide-validation.json':offsets?'kafka-offset-validation.json':recovery?'kafka-recovery-validation.json':'kafka-guide-validation.json');
+const file=path.join(root,comet?'comet-guide-validation.json':spark?'spark-guide-validation.json':offsets?'kafka-offset-validation.json':recovery?'kafka-recovery-validation.json':'kafka-guide-validation.json');
 const previous=JSON.parse(fs.readFileSync(file,'utf8'));
 const passed=results.every(r=>r.ubuntuLoaded&&r.labelFonts.length&&r.labelFonts.every(f=>f.includes('Ubuntu'))&&!r.overlaps.length&&!r.textOverlaps.length&&!r.clippedText.length);
 fs.writeFileSync(file,JSON.stringify({...previous,rendered:results,diagramGeometryPassed:passed},null,2)+'\n');

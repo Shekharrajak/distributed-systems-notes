@@ -1,0 +1,174 @@
+== Physical Plan ==
+* CometColumnarToRow (33)
++- CometSort (32)
+   +- CometExchange (31)
+      +- CometHashAggregate (30)
+         +- CometExchange (29)
+            +- CometHashAggregate (28)
+               +- CometProject (27)
+                  +- CometBroadcastHashJoin (26)
+                     :- CometProject (22)
+                     :  +- CometBroadcastHashJoin (21)
+                     :     :- CometProject (17)
+                     :     :  +- CometBroadcastHashJoin (16)
+                     :     :     :- CometProject (12)
+                     :     :     :  +- CometBroadcastHashJoin (11)
+                     :     :     :     :- CometProject (7)
+                     :     :     :     :  +- CometBroadcastHashJoin (6)
+                     :     :     :     :     :- CometBroadcastExchange (3)
+                     :     :     :     :     :  +- CometFilter (2)
+                     :     :     :     :     :     +- CometIcebergNativeScan (1)
+                     :     :     :     :     +- CometFilter (5)
+                     :     :     :     :        +- CometIcebergNativeScan (4)
+                     :     :     :     +- CometBroadcastExchange (10)
+                     :     :     :        +- CometFilter (9)
+                     :     :     :           +- CometIcebergNativeScan (8)
+                     :     :     +- CometBroadcastExchange (15)
+                     :     :        +- CometFilter (14)
+                     :     :           +- CometIcebergNativeScan (13)
+                     :     +- CometBroadcastExchange (20)
+                     :        +- CometFilter (19)
+                     :           +- CometIcebergNativeScan (18)
+                     +- CometBroadcastExchange (25)
+                        +- CometFilter (24)
+                           +- CometIcebergNativeScan (23)
+
+
+(1) CometIcebergNativeScan
+Output [2]: [s_suppkey#108L, s_nationkey#111L]
+Arguments: [s_suppkey#108L, s_nationkey#111L], /private/tmp/comet-iceberg-demo/warehouse/tpch/supplier/metadata/v1.metadata.json, local.tpch.supplier (branch=null) [filters=s_suppkey IS NOT NULL, s_nationkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [2]: [s_suppkey#108L, s_nationkey#111L]
+Condition : (isnotnull(s_suppkey#108L) AND isnotnull(s_nationkey#111L))
+
+(3) CometBroadcastExchange
+Input [2]: [s_suppkey#108L, s_nationkey#111L]
+Arguments: [s_suppkey#108L, s_nationkey#111L]
+
+(4) CometIcebergNativeScan
+Output [5]: [l_orderkey#16L, l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_orderkey#16L, l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9131, l_shipdate <= 9861, l_suppkey IS NOT NULL, l_orderkey IS NOT NULL, groupedBy=], 24
+
+(5) CometFilter
+Input [5]: [l_orderkey#16L, l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : (isnotnull(l_suppkey#18L) AND isnotnull(l_orderkey#16L))
+
+(6) CometBroadcastHashJoin
+Left output [2]: [s_suppkey#108L, s_nationkey#111L]
+Right output [5]: [l_orderkey#16L, l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [s_suppkey#108L], [l_suppkey#18L], Inner, BuildLeft
+
+(7) CometProject
+Input [7]: [s_suppkey#108L, s_nationkey#111L, l_orderkey#16L, l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [s_nationkey#111L, l_orderkey#16L, l_extendedprice#21, l_discount#22, l_shipdate#26], [s_nationkey#111L, l_orderkey#16L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(8) CometIcebergNativeScan
+Output [2]: [o_orderkey#56L, o_custkey#57L]
+Arguments: [o_orderkey#56L, o_custkey#57L], /private/tmp/comet-iceberg-demo/warehouse/tpch/orders/metadata/v2.metadata.json, local.tpch.orders (branch=null) [filters=o_orderkey IS NOT NULL, o_custkey IS NOT NULL, groupedBy=], 80
+
+(9) CometFilter
+Input [2]: [o_orderkey#56L, o_custkey#57L]
+Condition : (isnotnull(o_orderkey#56L) AND isnotnull(o_custkey#57L))
+
+(10) CometBroadcastExchange
+Input [2]: [o_orderkey#56L, o_custkey#57L]
+Arguments: [o_orderkey#56L, o_custkey#57L]
+
+(11) CometBroadcastHashJoin
+Left output [5]: [s_nationkey#111L, l_orderkey#16L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Right output [2]: [o_orderkey#56L, o_custkey#57L]
+Arguments: [l_orderkey#16L], [o_orderkey#56L], Inner, BuildRight
+
+(12) CometProject
+Input [7]: [s_nationkey#111L, l_orderkey#16L, l_extendedprice#21, l_discount#22, l_shipdate#26, o_orderkey#56L, o_custkey#57L]
+Arguments: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, o_custkey#57L], [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, o_custkey#57L]
+
+(13) CometIcebergNativeScan
+Output [2]: [c_custkey#0L, c_nationkey#3L]
+Arguments: [c_custkey#0L, c_nationkey#3L], /private/tmp/comet-iceberg-demo/warehouse/tpch/customer/metadata/v1.metadata.json, local.tpch.customer (branch=null) [filters=c_custkey IS NOT NULL, c_nationkey IS NOT NULL, groupedBy=], 1
+
+(14) CometFilter
+Input [2]: [c_custkey#0L, c_nationkey#3L]
+Condition : (isnotnull(c_custkey#0L) AND isnotnull(c_nationkey#3L))
+
+(15) CometBroadcastExchange
+Input [2]: [c_custkey#0L, c_nationkey#3L]
+Arguments: [c_custkey#0L, c_nationkey#3L]
+
+(16) CometBroadcastHashJoin
+Left output [5]: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, o_custkey#57L]
+Right output [2]: [c_custkey#0L, c_nationkey#3L]
+Arguments: [o_custkey#57L], [c_custkey#0L], Inner, BuildRight
+
+(17) CometProject
+Input [7]: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, o_custkey#57L, c_custkey#0L, c_nationkey#3L]
+Arguments: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L], [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L]
+
+(18) CometIcebergNativeScan
+Output [2]: [n_nationkey#48L, n_name#49]
+Arguments: [n_nationkey#48L, n_name#49], /private/tmp/comet-iceberg-demo/warehouse/tpch/nation/metadata/v1.metadata.json, local.tpch.nation (branch=null) [filters=n_nationkey IS NOT NULL, (n_name = 'GERMANY' OR n_name = 'IRAQ'), groupedBy=], 1
+
+(19) CometFilter
+Input [2]: [n_nationkey#48L, n_name#49]
+Condition : (isnotnull(n_nationkey#48L) AND ((n_name#49 = GERMANY) OR (n_name#49 = IRAQ)))
+
+(20) CometBroadcastExchange
+Input [2]: [n_nationkey#48L, n_name#49]
+Arguments: [n_nationkey#48L, n_name#49]
+
+(21) CometBroadcastHashJoin
+Left output [5]: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L]
+Right output [2]: [n_nationkey#48L, n_name#49]
+Arguments: [s_nationkey#111L], [n_nationkey#48L], Inner, BuildRight
+
+(22) CometProject
+Input [7]: [s_nationkey#111L, l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L, n_nationkey#48L, n_name#49]
+Arguments: [l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L, n_name#49], [l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L, n_name#49]
+
+(23) CometIcebergNativeScan
+Output [2]: [n_nationkey#331L, n_name#332]
+Arguments: [n_nationkey#331L, n_name#332], /private/tmp/comet-iceberg-demo/warehouse/tpch/nation/metadata/v1.metadata.json, local.tpch.nation (branch=null) [filters=n_nationkey IS NOT NULL, (n_name = 'IRAQ' OR n_name = 'GERMANY'), groupedBy=], 1
+
+(24) CometFilter
+Input [2]: [n_nationkey#331L, n_name#332]
+Condition : (isnotnull(n_nationkey#331L) AND ((n_name#332 = IRAQ) OR (n_name#332 = GERMANY)))
+
+(25) CometBroadcastExchange
+Input [2]: [n_nationkey#331L, n_name#332]
+Arguments: [n_nationkey#331L, n_name#332]
+
+(26) CometBroadcastHashJoin
+Left output [5]: [l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L, n_name#49]
+Right output [2]: [n_nationkey#331L, n_name#332]
+Arguments: [c_nationkey#3L], [n_nationkey#331L], Inner, (((n_name#49 = GERMANY) AND (n_name#332 = IRAQ)) OR ((n_name#49 = IRAQ) AND (n_name#332 = GERMANY))), BuildRight
+
+(27) CometProject
+Input [7]: [l_extendedprice#21, l_discount#22, l_shipdate#26, c_nationkey#3L, n_name#49, n_nationkey#331L, n_name#332]
+Arguments: [supp_nation#326, cust_nation#327, l_year#328, volume#329], [n_name#49 AS supp_nation#326, n_name#332 AS cust_nation#327, year(l_shipdate#26) AS l_year#328, (l_extendedprice#21 * (1 - l_discount#22)) AS volume#329]
+
+(28) CometHashAggregate
+Input [4]: [supp_nation#326, cust_nation#327, l_year#328, volume#329]
+Keys [3]: [supp_nation#326, cust_nation#327, l_year#328]
+Functions [1]: [partial_sum(volume#329)]
+
+(29) CometExchange
+Input [5]: [supp_nation#326, cust_nation#327, l_year#328, sum#357, isEmpty#358]
+Arguments: hashpartitioning(supp_nation#326, cust_nation#327, l_year#328, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=1810]
+
+(30) CometHashAggregate
+Input [5]: [supp_nation#326, cust_nation#327, l_year#328, sum#357, isEmpty#358]
+Keys [3]: [supp_nation#326, cust_nation#327, l_year#328]
+Functions [1]: [sum(volume#329)]
+
+(31) CometExchange
+Input [4]: [supp_nation#326, cust_nation#327, l_year#328, revenue#330]
+Arguments: rangepartitioning(supp_nation#326 ASC NULLS FIRST, cust_nation#327 ASC NULLS FIRST, l_year#328 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=1812]
+
+(32) CometSort
+Input [4]: [supp_nation#326, cust_nation#327, l_year#328, revenue#330]
+Arguments: [supp_nation#326, cust_nation#327, l_year#328, revenue#330], [supp_nation#326 ASC NULLS FIRST, cust_nation#327 ASC NULLS FIRST, l_year#328 ASC NULLS FIRST]
+
+(33) CometColumnarToRow [codegen id : 1]
+Input [4]: [supp_nation#326, cust_nation#327, l_year#328, revenue#330]
+

@@ -1,0 +1,74 @@
+== Physical Plan ==
+* HashAggregate (13)
++- Exchange (12)
+   +- * HashAggregate (11)
+      +- * Project (10)
+         +- * BroadcastHashJoin Inner BuildLeft (9)
+            :- BroadcastExchange (5)
+            :  +- * Project (4)
+            :     +- * Filter (3)
+            :        +- * ColumnarToRow (2)
+            :           +- BatchScan local.tpch.lineitem (1)
+            +- * Filter (8)
+               +- * ColumnarToRow (7)
+                  +- BatchScan local.tpch.part (6)
+
+
+(1) BatchScan local.tpch.lineitem
+Output [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9162, l_shipdate < 9190, l_partkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 1]
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(3) Filter [codegen id : 1]
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_partkey#17L)
+
+(4) Project [codegen id : 1]
+Output [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(5) BroadcastExchange
+Input [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=2919]
+
+(6) BatchScan local.tpch.part
+Output [2]: [p_partkey#74L, p_type#78]
+local.tpch.part (branch=null) [filters=p_partkey IS NOT NULL, groupedBy=]
+
+(7) ColumnarToRow
+Input [2]: [p_partkey#74L, p_type#78]
+
+(8) Filter
+Input [2]: [p_partkey#74L, p_type#78]
+Condition : isnotnull(p_partkey#74L)
+
+(9) BroadcastHashJoin [codegen id : 2]
+Left keys [1]: [l_partkey#17L]
+Right keys [1]: [p_partkey#74L]
+Join type: Inner
+Join condition: None
+
+(10) Project [codegen id : 2]
+Output [3]: [l_extendedprice#21, l_discount#22, p_type#78]
+Input [5]: [l_partkey#17L, l_extendedprice#21, l_discount#22, p_partkey#74L, p_type#78]
+
+(11) HashAggregate [codegen id : 2]
+Input [3]: [l_extendedprice#21, l_discount#22, p_type#78]
+Keys: []
+Functions [2]: [partial_sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [4]: [sum#651, isEmpty#652, sum#653, isEmpty#654]
+Results [4]: [sum#655, isEmpty#656, sum#657, isEmpty#658]
+
+(12) Exchange
+Input [4]: [sum#655, isEmpty#656, sum#657, isEmpty#658]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=2928]
+
+(13) HashAggregate [codegen id : 3]
+Input [4]: [sum#655, isEmpty#656, sum#657, isEmpty#658]
+Keys: []
+Functions [2]: [sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [2]: [sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END)#642, sum((l_extendedprice#21 * (1 - l_discount#22)))#643]
+Results [1]: [((100.00 * sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END)#642) / sum((l_extendedprice#21 * (1 - l_discount#22)))#643) AS promo_revenue#641]
+

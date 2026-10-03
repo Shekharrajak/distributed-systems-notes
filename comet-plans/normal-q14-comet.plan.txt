@@ -1,0 +1,65 @@
+== Physical Plan ==
+* CometColumnarToRow (12)
++- CometHashAggregate (11)
+   +- CometExchange (10)
+      +- CometHashAggregate (9)
+         +- CometProject (8)
+            +- CometBroadcastHashJoin (7)
+               :- CometBroadcastExchange (4)
+               :  +- CometProject (3)
+               :     +- CometFilter (2)
+               :        +- CometIcebergNativeScan (1)
+               +- CometFilter (6)
+                  +- CometIcebergNativeScan (5)
+
+
+(1) CometIcebergNativeScan
+Output [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9162, l_shipdate < 9190, l_partkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_partkey#17L)
+
+(3) CometProject
+Input [4]: [l_partkey#17L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22], [l_partkey#17L, l_extendedprice#21, l_discount#22]
+
+(4) CometBroadcastExchange
+Input [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Arguments: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+
+(5) CometIcebergNativeScan
+Output [2]: [p_partkey#74L, p_type#78]
+Arguments: [p_partkey#74L, p_type#78], /private/tmp/comet-iceberg-demo/warehouse/tpch/part/metadata/v1.metadata.json, local.tpch.part (branch=null) [filters=p_partkey IS NOT NULL, groupedBy=], 1
+
+(6) CometFilter
+Input [2]: [p_partkey#74L, p_type#78]
+Condition : isnotnull(p_partkey#74L)
+
+(7) CometBroadcastHashJoin
+Left output [3]: [l_partkey#17L, l_extendedprice#21, l_discount#22]
+Right output [2]: [p_partkey#74L, p_type#78]
+Arguments: [l_partkey#17L], [p_partkey#74L], Inner, BuildLeft
+
+(8) CometProject
+Input [5]: [l_partkey#17L, l_extendedprice#21, l_discount#22, p_partkey#74L, p_type#78]
+Arguments: [l_extendedprice#21, l_discount#22, p_type#78], [l_extendedprice#21, l_discount#22, p_type#78]
+
+(9) CometHashAggregate
+Input [3]: [l_extendedprice#21, l_discount#22, p_type#78]
+Keys: []
+Functions [2]: [partial_sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(10) CometExchange
+Input [4]: [sum#553, isEmpty#554, sum#555, isEmpty#556]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=3915]
+
+(11) CometHashAggregate
+Input [4]: [sum#553, isEmpty#554, sum#555, isEmpty#556]
+Keys: []
+Functions [2]: [sum(CASE WHEN StartsWith(p_type#78, PROMO) THEN (l_extendedprice#21 * (1 - l_discount#22)) ELSE 0.0000 END), sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(12) CometColumnarToRow [codegen id : 1]
+Input [1]: [promo_revenue#539]
+

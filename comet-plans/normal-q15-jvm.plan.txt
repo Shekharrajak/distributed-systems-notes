@@ -1,0 +1,156 @@
+== Physical Plan ==
+* Sort (17)
++- Exchange (16)
+   +- * Project (15)
+      +- * BroadcastHashJoin Inner BuildLeft (14)
+         :- BroadcastExchange (4)
+         :  +- * Filter (3)
+         :     +- * ColumnarToRow (2)
+         :        +- BatchScan local.tpch.supplier (1)
+         +- * Project (13)
+            +- * Filter (12)
+               +- * HashAggregate (11)
+                  +- Exchange (10)
+                     +- * HashAggregate (9)
+                        +- * Project (8)
+                           +- * Filter (7)
+                              +- * ColumnarToRow (6)
+                                 +- BatchScan local.tpch.lineitem (5)
+
+
+(1) BatchScan local.tpch.supplier
+Output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+local.tpch.supplier (branch=null) [filters=s_suppkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 1]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+
+(3) Filter [codegen id : 1]
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Condition : isnotnull(s_suppkey#108L)
+
+(4) BroadcastExchange
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [plan_id=3078]
+
+(5) BatchScan local.tpch.lineitem
+Output [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, l_suppkey IS NOT NULL, groupedBy=]
+
+(6) ColumnarToRow [codegen id : 2]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(7) Filter [codegen id : 2]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+Condition : isnotnull(l_suppkey#18L)
+
+(8) Project [codegen id : 2]
+Output [3]: [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+Input [4]: [l_suppkey#18L, l_extendedprice#21, l_discount#22, l_shipdate#26]
+
+(9) HashAggregate [codegen id : 2]
+Input [3]: [l_suppkey#18L, l_extendedprice#21, l_discount#22]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [2]: [sum#711, isEmpty#712]
+Results [3]: [l_suppkey#18L, sum#713, isEmpty#714]
+
+(10) Exchange
+Input [3]: [l_suppkey#18L, sum#713, isEmpty#714]
+Arguments: hashpartitioning(l_suppkey#18L, 8), ENSURE_REQUIREMENTS, [plan_id=3086]
+
+(11) HashAggregate
+Input [3]: [l_suppkey#18L, sum#713, isEmpty#714]
+Keys [1]: [l_suppkey#18L]
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))#670]
+Results [2]: [l_suppkey#18L, sum((l_extendedprice#21 * (1 - l_discount#22)))#670 AS sum((l_extendedprice * (1 - l_discount)))#671]
+
+(12) Filter
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#671]
+Condition : (isnotnull(sum((l_extendedprice * (1 - l_discount)))#671) AND (sum((l_extendedprice * (1 - l_discount)))#671 = Subquery scalar-subquery#667, [id=#3039]))
+
+(13) Project
+Output [2]: [l_suppkey#18L AS supplier_no#668L, sum((l_extendedprice * (1 - l_discount)))#671 AS total_revenue#669]
+Input [2]: [l_suppkey#18L, sum((l_extendedprice * (1 - l_discount)))#671]
+
+(14) BroadcastHashJoin [codegen id : 3]
+Left keys [1]: [s_suppkey#108L]
+Right keys [1]: [supplier_no#668L]
+Join type: Inner
+Join condition: None
+
+(15) Project [codegen id : 3]
+Output [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#669]
+Input [6]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, supplier_no#668L, total_revenue#669]
+
+(16) Exchange
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#669]
+Arguments: rangepartitioning(s_suppkey#108L ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=3094]
+
+(17) Sort [codegen id : 4]
+Input [5]: [s_suppkey#108L, s_name#109, s_address#110, s_phone#112, total_revenue#669]
+Arguments: [s_suppkey#108L ASC NULLS FIRST], true, 0
+
+===== Subqueries =====
+
+Subquery:1 Hosting operator id = 12 Hosting Expression = Subquery scalar-subquery#667, [id=#3039]
+* HashAggregate (26)
++- Exchange (25)
+   +- * HashAggregate (24)
+      +- * HashAggregate (23)
+         +- Exchange (22)
+            +- * HashAggregate (21)
+               +- * Project (20)
+                  +- * ColumnarToRow (19)
+                     +- BatchScan local.tpch.lineitem (18)
+
+
+(18) BatchScan local.tpch.lineitem
+Output [4]: [l_suppkey#680L, l_extendedprice#683, l_discount#684, l_shipdate#688]
+local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 9709, l_shipdate < 9801, groupedBy=]
+
+(19) ColumnarToRow [codegen id : 1]
+Input [4]: [l_suppkey#680L, l_extendedprice#683, l_discount#684, l_shipdate#688]
+
+(20) Project [codegen id : 1]
+Output [3]: [l_suppkey#680L, l_extendedprice#683, l_discount#684]
+Input [4]: [l_suppkey#680L, l_extendedprice#683, l_discount#684, l_shipdate#688]
+
+(21) HashAggregate [codegen id : 1]
+Input [3]: [l_suppkey#680L, l_extendedprice#683, l_discount#684]
+Keys [1]: [l_suppkey#680L]
+Functions [1]: [partial_sum((l_extendedprice#683 * (1 - l_discount#684)))]
+Aggregate Attributes [2]: [sum#717, isEmpty#718]
+Results [3]: [l_suppkey#680L, sum#719, isEmpty#720]
+
+(22) Exchange
+Input [3]: [l_suppkey#680L, sum#719, isEmpty#720]
+Arguments: hashpartitioning(l_suppkey#680L, 8), ENSURE_REQUIREMENTS, [plan_id=3030]
+
+(23) HashAggregate [codegen id : 2]
+Input [3]: [l_suppkey#680L, sum#719, isEmpty#720]
+Keys [1]: [l_suppkey#680L]
+Functions [1]: [sum((l_extendedprice#683 * (1 - l_discount#684)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#683 * (1 - l_discount#684)))#674]
+Results [1]: [sum((l_extendedprice#683 * (1 - l_discount#684)))#674 AS total_revenue#673]
+
+(24) HashAggregate [codegen id : 2]
+Input [1]: [total_revenue#673]
+Keys: []
+Functions [1]: [partial_max(total_revenue#673)]
+Aggregate Attributes [1]: [max#715]
+Results [1]: [max#716]
+
+(25) Exchange
+Input [1]: [max#716]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=3035]
+
+(26) HashAggregate [codegen id : 3]
+Input [1]: [max#716]
+Keys: []
+Functions [1]: [max(total_revenue#673)]
+Aggregate Attributes [1]: [max(total_revenue#673)#676]
+Results [1]: [max(total_revenue#673)#676 AS max(total_revenue)#677]
+
+

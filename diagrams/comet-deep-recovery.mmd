@@ -1,0 +1,21 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":60,"messageMargin":42,"wrap":true,"width":160}}}%%
+sequenceDiagram
+box rgb(224,242,254) Driver
+ participant D as DAGScheduler
+end
+box rgb(220,252,231) Executors
+ participant R as Reduce attempt
+ participant M as New map attempt
+end
+box rgb(241,245,249) Durable input
+ participant I as Snapshot files
+end
+R-->>D: FetchFailed for missing map block
+D->>D: Invalidate output and reschedule required work
+D->>M: Launch replacement map task
+M->>I: Read pinned input files
+I-->>M: Data and deletes
+M->>M: Rebuild shuffle output
+M-->>D: New MapStatus
+D->>R: Launch reduce reattempt
+R->>M: Fetch replacement blocks

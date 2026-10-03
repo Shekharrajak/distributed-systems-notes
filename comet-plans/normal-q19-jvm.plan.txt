@@ -1,0 +1,74 @@
+== Physical Plan ==
+* HashAggregate (13)
++- Exchange (12)
+   +- * HashAggregate (11)
+      +- * Project (10)
+         +- * BroadcastHashJoin Inner BuildRight (9)
+            :- * Project (4)
+            :  +- * Filter (3)
+            :     +- * ColumnarToRow (2)
+            :        +- BatchScan local.tpch.lineitem (1)
+            +- BroadcastExchange (8)
+               +- * Filter (7)
+                  +- * ColumnarToRow (6)
+                     +- BatchScan local.tpch.part (5)
+
+
+(1) BatchScan local.tpch.lineitem
+Output [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+local.tpch.lineitem (branch=null) [filters=l_shipinstruct IS NOT NULL, l_shipmode IN ('AIR', 'AIR REG'), l_shipinstruct = 'DELIVER IN PERSON', l_partkey IS NOT NULL, (((l_quantity >= 8.00 AND l_quantity <= 18.00) OR (l_quantity >= 20.00 AND l_quantity <= 30.00)) OR (l_quantity >= 30.00 AND l_quantity <= 40.00)), groupedBy=]
+
+(2) ColumnarToRow [codegen id : 2]
+Input [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+
+(3) Filter [codegen id : 2]
+Input [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+Condition : ((((isnotnull(l_shipinstruct#29) AND l_shipmode#30 IN (AIR,AIR REG)) AND (l_shipinstruct#29 = DELIVER IN PERSON)) AND isnotnull(l_partkey#17L)) AND ((((l_quantity#20 >= 8.00) AND (l_quantity#20 <= 18.00)) OR ((l_quantity#20 >= 20.00) AND (l_quantity#20 <= 30.00))) OR ((l_quantity#20 >= 30.00) AND (l_quantity#20 <= 40.00))))
+
+(4) Project [codegen id : 2]
+Output [4]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22]
+Input [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+
+(5) BatchScan local.tpch.part
+Output [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+local.tpch.part (branch=null) [filters=p_size IS NOT NULL, p_size >= 1, p_partkey IS NOT NULL, ((((p_brand = 'Brand#21' AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')) AND p_size <= 5) OR ((p_brand = 'Brand#13' AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')) AND p_size <= 10)) OR ((p_brand = 'Brand#52' AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')) AND p_size <= 15)), groupedBy=]
+
+(6) ColumnarToRow [codegen id : 1]
+Input [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+
+(7) Filter [codegen id : 1]
+Input [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Condition : (((isnotnull(p_size#79) AND (p_size#79 >= 1)) AND isnotnull(p_partkey#74L)) AND (((((p_brand#77 = Brand#21) AND p_container#80 IN (SM CASE,SM BOX,SM PACK,SM PKG)) AND (p_size#79 <= 5)) OR (((p_brand#77 = Brand#13) AND p_container#80 IN (MED BAG,MED BOX,MED PKG,MED PACK)) AND (p_size#79 <= 10))) OR (((p_brand#77 = Brand#52) AND p_container#80 IN (LG CASE,LG BOX,LG PACK,LG PKG)) AND (p_size#79 <= 15))))
+
+(8) BroadcastExchange
+Input [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [plan_id=3867]
+
+(9) BroadcastHashJoin [codegen id : 2]
+Left keys [1]: [l_partkey#17L]
+Right keys [1]: [p_partkey#74L]
+Join type: Inner
+Join condition: (((((((p_brand#77 = Brand#21) AND p_container#80 IN (SM CASE,SM BOX,SM PACK,SM PKG)) AND (l_quantity#20 >= 8.00)) AND (l_quantity#20 <= 18.00)) AND (p_size#79 <= 5)) OR (((((p_brand#77 = Brand#13) AND p_container#80 IN (MED BAG,MED BOX,MED PKG,MED PACK)) AND (l_quantity#20 >= 20.00)) AND (l_quantity#20 <= 30.00)) AND (p_size#79 <= 10))) OR (((((p_brand#77 = Brand#52) AND p_container#80 IN (LG CASE,LG BOX,LG PACK,LG PKG)) AND (l_quantity#20 >= 30.00)) AND (l_quantity#20 <= 40.00)) AND (p_size#79 <= 15)))
+
+(10) Project [codegen id : 2]
+Output [2]: [l_extendedprice#21, l_discount#22]
+Input [8]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+
+(11) HashAggregate [codegen id : 2]
+Input [2]: [l_extendedprice#21, l_discount#22]
+Keys: []
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [2]: [sum#882, isEmpty#883]
+Results [2]: [sum#884, isEmpty#885]
+
+(12) Exchange
+Input [2]: [sum#884, isEmpty#885]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=3873]
+
+(13) HashAggregate [codegen id : 3]
+Input [2]: [sum#884, isEmpty#885]
+Keys: []
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+Aggregate Attributes [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))#870]
+Results [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))#870 AS revenue#869]
+

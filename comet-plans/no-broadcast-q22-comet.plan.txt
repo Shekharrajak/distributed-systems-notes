@@ -1,0 +1,127 @@
+== Physical Plan ==
+* CometColumnarToRow (16)
++- CometSort (15)
+   +- CometExchange (14)
+      +- CometHashAggregate (13)
+         +- CometExchange (12)
+            +- CometHashAggregate (11)
+               +- CometProject (10)
+                  +- CometSortMergeJoin (9)
+                     :- CometSort (4)
+                     :  +- CometExchange (3)
+                     :     +- CometFilter (2)
+                     :        +- CometIcebergNativeScan (1)
+                     +- CometSort (8)
+                        +- CometExchange (7)
+                           +- CometProject (6)
+                              +- CometIcebergNativeScan (5)
+
+
+(1) CometIcebergNativeScan
+Output [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: [c_custkey#0L, c_phone#4, c_acctbal#5], /private/tmp/comet-iceberg-demo/warehouse/tpch/customer/metadata/v1.metadata.json, local.tpch.customer (branch=null) [filters=c_acctbal IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Condition : ((isnotnull(c_acctbal#5) AND substring(c_phone#4, 1, 2) IN (24,34,16,30,33,14,13)) AND (cast(c_acctbal#5 as decimal(16,6)) > Subquery scalar-subquery#1621, [id=#14098]))
+
+(3) CometExchange
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: hashpartitioning(c_custkey#0L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=14190]
+
+(4) CometSort
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: [c_custkey#0L, c_phone#4, c_acctbal#5], [c_custkey#0L ASC NULLS FIRST]
+
+(5) CometIcebergNativeScan
+Output [9]: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64]
+Arguments: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64], /private/tmp/comet-iceberg-demo/warehouse/tpch/orders/metadata/v2.metadata.json, local.tpch.orders (branch=null) [filters=, groupedBy=], 80
+
+(6) CometProject
+Input [9]: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64]
+Arguments: [o_custkey#57L], [o_custkey#57L]
+
+(7) CometExchange
+Input [1]: [o_custkey#57L]
+Arguments: hashpartitioning(o_custkey#57L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=14194]
+
+(8) CometSort
+Input [1]: [o_custkey#57L]
+Arguments: [o_custkey#57L], [o_custkey#57L ASC NULLS FIRST]
+
+(9) CometSortMergeJoin
+Left output [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Right output [1]: [o_custkey#57L]
+Arguments: [c_custkey#0L], [o_custkey#57L], LeftAnti
+
+(10) CometProject
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: [cntrycode#1620, c_acctbal#5], [substring(c_phone#4, 1, 2) AS cntrycode#1620, c_acctbal#5]
+
+(11) CometHashAggregate
+Input [2]: [cntrycode#1620, c_acctbal#5]
+Keys [1]: [cntrycode#1620]
+Functions [2]: [partial_count(1), partial_sum(c_acctbal#5)]
+
+(12) CometExchange
+Input [4]: [cntrycode#1620, count#1657L, sum#1658, isEmpty#1659]
+Arguments: hashpartitioning(cntrycode#1620, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=14199]
+
+(13) CometHashAggregate
+Input [4]: [cntrycode#1620, count#1657L, sum#1658, isEmpty#1659]
+Keys [1]: [cntrycode#1620]
+Functions [2]: [count(1), sum(c_acctbal#5)]
+
+(14) CometExchange
+Input [3]: [cntrycode#1620, numcust#1623L, totacctbal#1624]
+Arguments: rangepartitioning(cntrycode#1620 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=14201]
+
+(15) CometSort
+Input [3]: [cntrycode#1620, numcust#1623L, totacctbal#1624]
+Arguments: [cntrycode#1620, numcust#1623L, totacctbal#1624], [cntrycode#1620 ASC NULLS FIRST]
+
+(16) CometColumnarToRow [codegen id : 1]
+Input [3]: [cntrycode#1620, numcust#1623L, totacctbal#1624]
+
+===== Subqueries =====
+
+Subquery:1 Hosting operator id = 2 Hosting Expression = Subquery scalar-subquery#1621, [id=#14098]
+* CometColumnarToRow (23)
++- CometHashAggregate (22)
+   +- CometExchange (21)
+      +- CometHashAggregate (20)
+         +- CometProject (19)
+            +- CometFilter (18)
+               +- CometIcebergNativeScan (17)
+
+
+(17) CometIcebergNativeScan
+Output [2]: [c_phone#1632, c_acctbal#1633]
+Arguments: [c_phone#1632, c_acctbal#1633], /private/tmp/comet-iceberg-demo/warehouse/tpch/customer/metadata/v1.metadata.json, local.tpch.customer (branch=null) [filters=c_acctbal IS NOT NULL, c_acctbal > 0.00, groupedBy=], 1
+
+(18) CometFilter
+Input [2]: [c_phone#1632, c_acctbal#1633]
+Condition : ((isnotnull(c_acctbal#1633) AND (c_acctbal#1633 > 0.00)) AND substring(c_phone#1632, 1, 2) IN (24,34,16,30,33,14,13))
+
+(19) CometProject
+Input [2]: [c_phone#1632, c_acctbal#1633]
+Arguments: [c_acctbal#1633], [c_acctbal#1633]
+
+(20) CometHashAggregate
+Input [1]: [c_acctbal#1633]
+Keys: []
+Functions [1]: [partial_avg(c_acctbal#1633)]
+
+(21) CometExchange
+Input [2]: [sum#1662, count#1663L]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=14091]
+
+(22) CometHashAggregate
+Input [2]: [sum#1662, count#1663L]
+Keys: []
+Functions [1]: [avg(c_acctbal#1633)]
+
+(23) CometColumnarToRow [codegen id : 1]
+Input [1]: [avg(c_acctbal)#1627]
+
+

@@ -9,7 +9,7 @@ fs.mkdirSync(shots,{recursive:true});
 const {default:puppeteer}=await import(process.env.GUIDE_PUPPETEER_MODULE||'puppeteer');
 const browser=await puppeteer.launch({executablePath:process.env.GUIDE_CHROME_BIN,headless:true,args:['--disable-gpu','--no-sandbox']});
 const report={pages:[],errors:[],interactions:[]};
-const validationFile=path.join(root,process.argv.includes('--spark')?'spark-guide-validation.json':process.argv.includes('--offsets')?'kafka-offset-validation.json':'kafka-recovery-validation.json');
+const validationFile=path.join(root,process.argv.includes('--comet')?'comet-guide-validation.json':process.argv.includes('--spark')?'spark-guide-validation.json':process.argv.includes('--offsets')?'kafka-offset-validation.json':'kafka-recovery-validation.json');
 const previous=JSON.parse(fs.readFileSync(validationFile,'utf8'));
 try{
  const page=await browser.newPage();page.on('pageerror',e=>report.errors.push(e.message));
@@ -24,13 +24,29 @@ try{
    assert(!result.overflow,`${file} overflows at ${width}`);assert.equal(result.brokenImages.length,0);assert.equal(result.activeNav,file);assert(result.fontLoaded);
    if(previous.pages.includes(file)){
     await page.screenshot({path:path.join(shots,`${file}-${width}.png`)});
+    if(await page.$('.diagram img')){
     const before=await page.$eval('.diagram img',i=>i.getBoundingClientRect().width);
     await page.click('.diagram [data-zoom="in"]');assert((await page.$eval('.diagram img',i=>i.getBoundingClientRect().width))>before);
     await page.click('.diagram [data-zoom="fit"]');
-    const id=await page.$eval('details.code',d=>d.id);
+    }
+    if(await page.$('details.code[id]')){
+    const id=await page.$eval('details.code[id]',d=>d.id);
     await page.evaluate(id=>{location.hash=id;},id);await page.waitForFunction(id=>document.getElementById(id).open,{},id);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
     report.interactions.push({file,width,zoom:true,sourceAnchorExpansion:true});
+    }
+    if(file==='comet-tpch-plan-atlas.html'){
+     assert.equal(await page.$$eval('.plan-capture',els=>els.length),88);
+     await page.type('#query-filter','Shipping-priority');
+     assert.equal(await page.$$eval('.query-section:not([hidden])',els=>els.length),1);
+     await page.evaluate(()=>{location.hash='q16';});
+     await page.waitForFunction(()=>document.querySelector('#query-filter').value==='');
+     for(const plan of await page.$$('#q16 .plan-capture'))await plan.evaluate(el=>{el.open=true;});
+     assert.equal(await page.$$eval('#q16 .plan-capture[open]',els=>els.length),4);
+     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+     await page.screenshot({path:path.join(shots,`atlas-expanded-${width}.png`)});
+     report.interactions.push({file,width,plans:88,queryFilter:true,deepLinkReveal:true,expandedVariants:4});
+    }
    }
   }
  }
