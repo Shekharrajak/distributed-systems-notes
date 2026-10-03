@@ -1,0 +1,20 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":60,"messageMargin":42,"wrap":true,"width":160}}}%%
+flowchart TB
+subgraph PLAN["Driver / Java Iceberg"]
+ A["Snapshot + schema + manifests"] --> B["Prune files and plan FileScanTasks"] --> C["Serialize task and delete metadata"]
+end
+subgraph READ["Executor / native Iceberg reader"]
+ D["FileIO + projected Parquet reads"] --> E["Delete handling + schema adaptation"] --> F["Arrow RecordBatch"]
+end
+subgraph COMPUTE["Eligible native fragment"]
+ G["Residual Filter + Project"] --> H["Join / Aggregate / Sort"]
+end
+C --> D
+F --> G
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef native fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef jvm fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C control
+class D,E,F,H,G native

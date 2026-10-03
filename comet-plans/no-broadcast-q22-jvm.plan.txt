@@ -1,0 +1,140 @@
+== Physical Plan ==
+* Sort (17)
++- Exchange (16)
+   +- * HashAggregate (15)
+      +- Exchange (14)
+         +- * HashAggregate (13)
+            +- * Project (12)
+               +- * SortMergeJoin LeftAnti (11)
+                  :- * Sort (5)
+                  :  +- Exchange (4)
+                  :     +- * Filter (3)
+                  :        +- * ColumnarToRow (2)
+                  :           +- BatchScan local.tpch.customer (1)
+                  +- * Sort (10)
+                     +- Exchange (9)
+                        +- * Project (8)
+                           +- * ColumnarToRow (7)
+                              +- BatchScan local.tpch.orders (6)
+
+
+(1) BatchScan local.tpch.customer
+Output [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+local.tpch.customer (branch=null) [filters=c_acctbal IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 1]
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+
+(3) Filter [codegen id : 1]
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Condition : ((isnotnull(c_acctbal#5) AND substring(c_phone#4, 1, 2) IN (24,34,16,30,33,14,13)) AND (cast(c_acctbal#5 as decimal(16,6)) > Subquery scalar-subquery#1933, [id=#10806]))
+
+(4) Exchange
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: hashpartitioning(c_custkey#0L, 8), ENSURE_REQUIREMENTS, [plan_id=10852]
+
+(5) Sort [codegen id : 2]
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+Arguments: [c_custkey#0L ASC NULLS FIRST], false, 0
+
+(6) BatchScan local.tpch.orders
+Output [9]: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64]
+local.tpch.orders (branch=null) [filters=, groupedBy=]
+
+(7) ColumnarToRow [codegen id : 3]
+Input [9]: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64]
+
+(8) Project [codegen id : 3]
+Output [1]: [o_custkey#57L]
+Input [9]: [o_orderkey#56L, o_custkey#57L, o_orderstatus#58, o_totalprice#59, o_orderdate#60, o_orderpriority#61, o_clerk#62, o_shippriority#63, o_comment#64]
+
+(9) Exchange
+Input [1]: [o_custkey#57L]
+Arguments: hashpartitioning(o_custkey#57L, 8), ENSURE_REQUIREMENTS, [plan_id=10861]
+
+(10) Sort [codegen id : 4]
+Input [1]: [o_custkey#57L]
+Arguments: [o_custkey#57L ASC NULLS FIRST], false, 0
+
+(11) SortMergeJoin [codegen id : 5]
+Left keys [1]: [c_custkey#0L]
+Right keys [1]: [o_custkey#57L]
+Join type: LeftAnti
+Join condition: None
+
+(12) Project [codegen id : 5]
+Output [2]: [substring(c_phone#4, 1, 2) AS cntrycode#1932, c_acctbal#5]
+Input [3]: [c_custkey#0L, c_phone#4, c_acctbal#5]
+
+(13) HashAggregate [codegen id : 5]
+Input [2]: [cntrycode#1932, c_acctbal#5]
+Keys [1]: [cntrycode#1932]
+Functions [2]: [partial_count(1), partial_sum(c_acctbal#5)]
+Aggregate Attributes [3]: [count#1966L, sum#1967, isEmpty#1968]
+Results [4]: [cntrycode#1932, count#1969L, sum#1970, isEmpty#1971]
+
+(14) Exchange
+Input [4]: [cntrycode#1932, count#1969L, sum#1970, isEmpty#1971]
+Arguments: hashpartitioning(cntrycode#1932, 8), ENSURE_REQUIREMENTS, [plan_id=10870]
+
+(15) HashAggregate [codegen id : 6]
+Input [4]: [cntrycode#1932, count#1969L, sum#1970, isEmpty#1971]
+Keys [1]: [cntrycode#1932]
+Functions [2]: [count(1), sum(c_acctbal#5)]
+Aggregate Attributes [2]: [count(1)#1937L, sum(c_acctbal#5)#1948]
+Results [3]: [cntrycode#1932, count(1)#1937L AS numcust#1935L, sum(c_acctbal#5)#1948 AS totacctbal#1936]
+
+(16) Exchange
+Input [3]: [cntrycode#1932, numcust#1935L, totacctbal#1936]
+Arguments: rangepartitioning(cntrycode#1932 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=10874]
+
+(17) Sort [codegen id : 7]
+Input [3]: [cntrycode#1932, numcust#1935L, totacctbal#1936]
+Arguments: [cntrycode#1932 ASC NULLS FIRST], true, 0
+
+===== Subqueries =====
+
+Subquery:1 Hosting operator id = 3 Hosting Expression = Subquery scalar-subquery#1933, [id=#10806]
+* HashAggregate (24)
++- Exchange (23)
+   +- * HashAggregate (22)
+      +- * Project (21)
+         +- * Filter (20)
+            +- * ColumnarToRow (19)
+               +- BatchScan local.tpch.customer (18)
+
+
+(18) BatchScan local.tpch.customer
+Output [2]: [c_phone#1944, c_acctbal#1945]
+local.tpch.customer (branch=null) [filters=c_acctbal IS NOT NULL, c_acctbal > 0.00, groupedBy=]
+
+(19) ColumnarToRow [codegen id : 1]
+Input [2]: [c_phone#1944, c_acctbal#1945]
+
+(20) Filter [codegen id : 1]
+Input [2]: [c_phone#1944, c_acctbal#1945]
+Condition : ((isnotnull(c_acctbal#1945) AND (c_acctbal#1945 > 0.00)) AND substring(c_phone#1944, 1, 2) IN (24,34,16,30,33,14,13))
+
+(21) Project [codegen id : 1]
+Output [1]: [c_acctbal#1945]
+Input [2]: [c_phone#1944, c_acctbal#1945]
+
+(22) HashAggregate [codegen id : 1]
+Input [1]: [c_acctbal#1945]
+Keys: []
+Functions [1]: [partial_avg(c_acctbal#1945)]
+Aggregate Attributes [2]: [sum#1972, count#1973L]
+Results [2]: [sum#1974, count#1975L]
+
+(23) Exchange
+Input [2]: [sum#1974, count#1975L]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=10802]
+
+(24) HashAggregate [codegen id : 2]
+Input [2]: [sum#1974, count#1975L]
+Keys: []
+Functions [1]: [avg(c_acctbal#1945)]
+Aggregate Attributes [1]: [avg(c_acctbal#1945)#1938]
+Results [1]: [avg(c_acctbal#1945)#1938 AS avg(c_acctbal)#1939]
+
+

@@ -1,0 +1,49 @@
+== Physical Plan ==
+* CometColumnarToRow (9)
++- CometSort (8)
+   +- CometExchange (7)
+      +- CometHashAggregate (6)
+         +- CometExchange (5)
+            +- CometHashAggregate (4)
+               +- CometProject (3)
+                  +- CometFilter (2)
+                     +- CometIcebergNativeScan (1)
+
+
+(1) CometIcebergNativeScan
+Output [7]: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25, l_shipdate#26]
+Arguments: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate <= 10493, groupedBy=], 81
+
+(2) CometFilter
+Input [7]: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25, l_shipdate#26]
+Condition : (l_shipdate#26 <= 1998-09-24)
+
+(3) CometProject
+Input [7]: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25, l_shipdate#26]
+Arguments: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25], [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25]
+
+(4) CometHashAggregate
+Input [6]: [l_quantity#20, l_extendedprice#21, l_discount#22, l_tax#23, l_returnflag#24, l_linestatus#25]
+Keys [2]: [l_returnflag#24, l_linestatus#25]
+Functions [8]: [partial_sum(l_quantity#20), partial_sum(l_extendedprice#21), partial_sum((l_extendedprice#21 * (1 - l_discount#22))), partial_sum(((l_extendedprice#21 * (1 - l_discount#22)) * (1 + l_tax#23))), partial_avg(l_quantity#20), partial_avg(l_extendedprice#21), partial_avg(l_discount#22), partial_count(1)]
+
+(5) CometExchange
+Input [17]: [l_returnflag#24, l_linestatus#25, sum#941, isEmpty#942, sum#943, isEmpty#944, sum#945, isEmpty#946, sum#947, isEmpty#948, sum#949, count#950L, sum#951, count#952L, sum#953, count#954L, count#955L]
+Arguments: hashpartitioning(l_returnflag#24, l_linestatus#25, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=6267]
+
+(6) CometHashAggregate
+Input [17]: [l_returnflag#24, l_linestatus#25, sum#941, isEmpty#942, sum#943, isEmpty#944, sum#945, isEmpty#946, sum#947, isEmpty#948, sum#949, count#950L, sum#951, count#952L, sum#953, count#954L, count#955L]
+Keys [2]: [l_returnflag#24, l_linestatus#25]
+Functions [8]: [sum(l_quantity#20), sum(l_extendedprice#21), sum((l_extendedprice#21 * (1 - l_discount#22))), sum(((l_extendedprice#21 * (1 - l_discount#22)) * (1 + l_tax#23))), avg(l_quantity#20), avg(l_extendedprice#21), avg(l_discount#22), count(1)]
+
+(7) CometExchange
+Input [10]: [l_returnflag#24, l_linestatus#25, sum_qty#893, sum_base_price#894, sum_disc_price#895, sum_charge#896, avg_qty#897, avg_price#898, avg_disc#899, count_order#900L]
+Arguments: rangepartitioning(l_returnflag#24 ASC NULLS FIRST, l_linestatus#25 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=6269]
+
+(8) CometSort
+Input [10]: [l_returnflag#24, l_linestatus#25, sum_qty#893, sum_base_price#894, sum_disc_price#895, sum_charge#896, avg_qty#897, avg_price#898, avg_disc#899, count_order#900L]
+Arguments: [l_returnflag#24, l_linestatus#25, sum_qty#893, sum_base_price#894, sum_disc_price#895, sum_charge#896, avg_qty#897, avg_price#898, avg_disc#899, count_order#900L], [l_returnflag#24 ASC NULLS FIRST, l_linestatus#25 ASC NULLS FIRST]
+
+(9) CometColumnarToRow [codegen id : 1]
+Input [10]: [l_returnflag#24, l_linestatus#25, sum_qty#893, sum_base_price#894, sum_disc_price#895, sum_charge#896, avg_qty#897, avg_price#898, avg_disc#899, count_order#900L]
+

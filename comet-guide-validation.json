@@ -1,0 +1,1168 @@
+{
+  "sourceRevisions": {
+    "comet": "184accac5b9cee6b761a6673c73c263adedef45e",
+    "spark": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e"
+  },
+  "sourceTestsExecuted": false,
+  "queryResultsExecuted": false,
+  "capturedPlans": 88,
+  "queries": 22,
+  "pages": [
+    "comet-iceberg-columnar.html",
+    "comet-shuffle-joins.html",
+    "comet-tpch-plan-atlas.html"
+  ],
+  "diagrams": [
+    "comet-deep-deployment",
+    "comet-deep-iceberg",
+    "comet-deep-boundaries",
+    "comet-deep-jvm-shuffle",
+    "comet-deep-native-shuffle",
+    "comet-deep-jvm-columnar-shuffle",
+    "comet-deep-network",
+    "comet-deep-broadcast",
+    "comet-deep-q3",
+    "comet-deep-aggregate",
+    "comet-deep-recovery",
+    "comet-deep-join-choice"
+  ],
+  "evidence": [
+    {
+      "id": "extensions",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/CometSparkSessionExtensions.scala",
+      "needle": "class CometSparkSessionExtensions",
+      "count": 45,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 88,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/CometSparkSessionExtensions.scala#L88",
+      "fileSha256": "d049b5cd28649970b93bfda10898243e5d72331a60481187e3379713c697ad68"
+    },
+    {
+      "id": "exec-rdd",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/CometExecRDD.scala",
+      "needle": "override def compute",
+      "count": 60,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 100,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/CometExecRDD.scala#L100",
+      "fileSha256": "28209acaefc517f9f84850d501ee7740bf2a201b77032fe63ea07977a8110cdf"
+    },
+    {
+      "id": "iterator",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/CometExecIterator.scala",
+      "needle": "createPlan(",
+      "count": 40,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 124,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/CometExecIterator.scala#L124",
+      "fileSha256": "d4ff4af44fd197eb596162e2b1dc605b9375c6cb621bb56d192b1223fbfc38a8"
+    },
+    {
+      "id": "spark-launch",
+      "repo": "spark",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala",
+      "needle": "private def launchTasks",
+      "count": 34,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 457,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala#L457",
+      "fileSha256": "898dee7cd8d82533d49bdfa20d397cb09e349affa924c23ae118272d244ec77b"
+    },
+    {
+      "id": "spark-strategy",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala",
+      "needle": "def createBroadcastHashJoin",
+      "count": 110,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 253,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L253",
+      "fileSha256": "6d94319033a2dad643f2be39f4a2124f09f8bf60b961e84f0882320a89cbe25c"
+    },
+    {
+      "id": "spark-requirements",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/EnsureRequirements.scala",
+      "needle": "private def ensureDistributionAndOrdering",
+      "count": 95,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 65,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/EnsureRequirements.scala#L65",
+      "fileSha256": "ff1531b239784de4263049bc7aebc32e7eb33171a66f51a4bbf66e9554d02f52"
+    },
+    {
+      "id": "transitions",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/rules/EliminateRedundantTransitions.scala",
+      "needle": "def createColumnarToRowExec",
+      "count": 40,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 284,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/rules/EliminateRedundantTransitions.scala#L284",
+      "fileSha256": "3003db1f04be6a436dc52af8a96246d1733fcc07b45bc8c741448202d6bff71c"
+    },
+    {
+      "id": "iceberg-exec",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/CometIcebergNativeScanExec.scala",
+      "needle": "case class CometIcebergNativeScanExec",
+      "count": 75,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 57,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/CometIcebergNativeScanExec.scala#L57",
+      "fileSha256": "f1cb72d8f2d4d549bc23b948a3ad9442b0d18f09af825c2c124e51a7f7d27ff8"
+    },
+    {
+      "id": "iceberg-serde",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/serde/operator/CometIcebergNativeScan.scala",
+      "needle": "def serializePartitions",
+      "count": 80,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 961,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/serde/operator/CometIcebergNativeScan.scala#L961",
+      "fileSha256": "5c9e59562b4533c51135ab869612261326c533000557f8b605494d16183b9485"
+    },
+    {
+      "id": "iceberg-rust",
+      "repo": "comet",
+      "file": "native/core/src/execution/operators/iceberg_scan.rs",
+      "needle": "fn execute_with_tasks",
+      "count": 78,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 175,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/native/core/src/execution/operators/iceberg_scan.rs#L175",
+      "fileSha256": "cfdfcebed414c9e6804ca9f1ec6024b9be918e5e59ca51a48d33156dcef39f73"
+    },
+    {
+      "id": "iceberg-test",
+      "repo": "comet",
+      "file": "spark/src/test/scala/org/apache/comet/CometIcebergNativeSuite.scala",
+      "needle": "test(\"filter pushdown - equality predicates\")",
+      "count": 40,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 155,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/test/scala/org/apache/comet/CometIcebergNativeSuite.scala#L155",
+      "fileSha256": "cf711caa853d4063c0b56bb7b5c067820f3d3e9fbad363fbdd7d0d27c8a9e8ff"
+    },
+    {
+      "id": "planner-filter",
+      "repo": "comet",
+      "file": "native/core/src/execution/planner.rs",
+      "needle": "OpStruct::Filter",
+      "count": 38,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 1319,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/native/core/src/execution/planner.rs#L1319",
+      "fileSha256": "d34a13a524baf66aea3bcb4af659497725b74e27fe6765379ca03e2d88695e60"
+    },
+    {
+      "id": "native-joins",
+      "repo": "comet",
+      "file": "native/core/src/execution/planner.rs",
+      "needle": "let join = Arc::new(SortMergeJoinExec::try_new",
+      "count": 110,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 2275,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/native/core/src/execution/planner.rs#L2275",
+      "fileSha256": "d34a13a524baf66aea3bcb4af659497725b74e27fe6765379ca03e2d88695e60"
+    },
+    {
+      "id": "spark-columnar",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/Columnar.scala",
+      "needle": "case class ColumnarToRowExec",
+      "count": 65,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 67,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/Columnar.scala#L67",
+      "fileSha256": "c9407c43e2f7deec49b279eb4ee0b7f233f35442023380a2874a08e150566e68"
+    },
+    {
+      "id": "comet-c2r",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/CometColumnarToRowExec.scala",
+      "needle": "case class CometColumnarToRowExec",
+      "count": 70,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 52,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/CometColumnarToRowExec.scala#L52",
+      "fileSha256": "d95443f7d63c01fce84b578e4d7bb3c0eeef60859b3a2ee23de56ccb4099fe65"
+    },
+    {
+      "id": "native-c2r",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/CometConf.scala",
+      "needle": "val COMET_NATIVE_COLUMNAR_TO_ROW_ENABLED",
+      "count": 24,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 324,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/CometConf.scala#L324",
+      "fileSha256": "52d980b38c80c3c3eac01cd67966971e823ae383a0a21c69a481911a879e47c2"
+    },
+    {
+      "id": "bridge",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/CometSparkToColumnarExec.scala",
+      "needle": "case class CometSparkToColumnarExec",
+      "count": 80,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 43,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/CometSparkToColumnarExec.scala#L43",
+      "fileSha256": "246d882963c55f35434c1f709c9ad89a5477f8d180ea24a33c016ce0d51b2603"
+    },
+    {
+      "id": "jvm-shuffle-input",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometShuffleExchangeExec.scala",
+      "needle": "@transient lazy val inputRDD",
+      "count": 42,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 135,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometShuffleExchangeExec.scala#L135",
+      "fileSha256": "7840f1726eab7a954799d950fa9b070401ce378fddb25961dbf4089a20b3483f"
+    },
+    {
+      "id": "rewrite-join",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/rules/RewriteJoin.scala",
+      "needle": "object RewriteJoin",
+      "count": 100,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 35,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/rules/RewriteJoin.scala#L35",
+      "fileSha256": "00a900fe84578d1efd3c090bb51233ae3bdc79296e6a9bd85587efe92053506a"
+    },
+    {
+      "id": "join-test",
+      "repo": "comet",
+      "file": "spark/src/test/scala/org/apache/comet/exec/CometJoinSuite.scala",
+      "needle": "test(\"SortMergeJoin with nullable TimestampType key runs natively\")",
+      "count": 35,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 285,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/test/scala/org/apache/comet/exec/CometJoinSuite.scala#L285",
+      "fileSha256": "c1c3f53be4098d0af8d94c525ab4b18c8b233b6defeabced0b4f12e17947f1ad"
+    },
+    {
+      "id": "spark-exchange",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/ShuffleExchangeExec.scala",
+      "needle": "def prepareShuffleDependency",
+      "count": 85,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 359,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/ShuffleExchangeExec.scala#L359",
+      "fileSha256": "03d270cbe3bda664f9217cf6a5a1d311b37245b232eb72763db8f73bcc2284d3"
+    },
+    {
+      "id": "spark-manager",
+      "repo": "spark",
+      "file": "core/src/main/scala/org/apache/spark/shuffle/sort/SortShuffleManager.scala",
+      "needle": "override def registerShuffle",
+      "count": 58,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 91,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/shuffle/sort/SortShuffleManager.scala#L91",
+      "fileSha256": "ef19684cbff7c6dc5b52820d5e1864e0607ca877386a7e5763238301c1f75765"
+    },
+    {
+      "id": "spark-fetch",
+      "repo": "spark",
+      "file": "core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala",
+      "needle": "shuffleClient.fetchBlocks",
+      "count": 35,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 380,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/storage/ShuffleBlockFetcherIterator.scala#L380",
+      "fileSha256": "91ecfd6f73fe90854eb42c44ebe3b87b6dd1e43eafbcd5a20139a94b333294bb"
+    },
+    {
+      "id": "native-writer",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometNativeShuffleWriter.scala",
+      "needle": "def writeInternal",
+      "count": 95,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 111,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometNativeShuffleWriter.scala#L111",
+      "fileSha256": "099f390f552461e7d314039aefc8ba49e904baead3994b262086f73636a8c093"
+    },
+    {
+      "id": "local-writer",
+      "repo": "comet",
+      "file": "native/shuffle/src/writers/local/local_partition_writer.rs",
+      "needle": "fn write<I>",
+      "count": 65,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 175,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/native/shuffle/src/writers/local/local_partition_writer.rs#L175",
+      "fileSha256": "6a7455bc7e97245d1958209b8636bdd016eeb3100fe69a0872c8b7a34a7d9e6c"
+    },
+    {
+      "id": "block-reader",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometBlockStoreShuffleReader.scala",
+      "needle": "new ShuffleBlockFetcherIterator",
+      "count": 70,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 59,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometBlockStoreShuffleReader.scala#L59",
+      "fileSha256": "96eef5aedc1b07c9f25f74810ffb3db5d21c939ccd4d5b9a6e9476af31244514"
+    },
+    {
+      "id": "shuffle-sink",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/serde/operator/CometSink.scala",
+      "needle": "def shouldUseShuffleScan",
+      "count": 35,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 108,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/serde/operator/CometSink.scala#L108",
+      "fileSha256": "875e19d70f682b9605d8d35997f527ef44f6fd0f55091228d41d958944e8ece7"
+    },
+    {
+      "id": "shuffle-scan",
+      "repo": "comet",
+      "file": "native/core/src/execution/operators/shuffle_scan.rs",
+      "needle": "impl ExecutionPlan",
+      "count": 65,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 283,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/native/core/src/execution/operators/shuffle_scan.rs#L283",
+      "fileSha256": "98fc05ab0add5b1b06a0644c89613117f24ec9b3b2700e9f91bb4a1fdbb0f830"
+    },
+    {
+      "id": "shuffle-test",
+      "repo": "comet",
+      "file": "spark/src/test/scala/org/apache/comet/exec/CometNativeShuffleSuite.scala",
+      "needle": "test(\"native shuffle plan preserves local partition writer and legacy output path\")",
+      "count": 23,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 353,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/test/scala/org/apache/comet/exec/CometNativeShuffleSuite.scala#L353",
+      "fileSha256": "d8bc4351532cea454d32d9eb67b21a12c2d9223bbe7dc85767959bcbd71a731f"
+    },
+    {
+      "id": "shuffle-manager",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometShuffleManager.scala",
+      "needle": "def registerShuffle",
+      "count": 80,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 116,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/execution/shuffle/CometShuffleManager.scala#L116",
+      "fileSha256": "d900a3ea74ce32e94f45bb33268e54f915530d9ec384f20f6ae41cb577eb1c72"
+    },
+    {
+      "id": "external-sorter",
+      "repo": "comet",
+      "file": "spark/src/main/java/org/apache/spark/shuffle/sort/CometShuffleExternalSorter.java",
+      "needle": "writeSortedFileNative",
+      "count": 38,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 198,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/java/org/apache/spark/shuffle/sort/CometShuffleExternalSorter.java#L198",
+      "fileSha256": "dd2b0cfa8b88f9ad2dd89f939e02bc6cd54d60b18af899cf3351442f54cda664"
+    },
+    {
+      "id": "shuffle-config",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/comet/CometConf.scala",
+      "needle": "val COMET_SHUFFLE_MODE",
+      "count": 46,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 404,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/comet/CometConf.scala#L404",
+      "fileSha256": "52d980b38c80c3c3eac01cd67966971e823ae383a0a21c69a481911a879e47c2"
+    },
+    {
+      "id": "spark-bhj",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/joins/BroadcastHashJoinExec.scala",
+      "needle": "protected override def doExecute()",
+      "count": 48,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 133,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/joins/BroadcastHashJoinExec.scala#L133",
+      "fileSha256": "e087f2114987323e8ef18340264313dacb8b689a103c1600110b238b47fbfa04"
+    },
+    {
+      "id": "spark-shj",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/joins/ShuffledHashJoinExec.scala",
+      "needle": "def buildHashedRelation",
+      "count": 50,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 103,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/joins/ShuffledHashJoinExec.scala#L103",
+      "fileSha256": "cf5efc0153a36e51b4eb7fbca5ddf818b6a79a263d4410cf197396d6572d1e12"
+    },
+    {
+      "id": "spark-smj",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/joins/SortMergeJoinExec.scala",
+      "needle": "override def requiredChildOrdering",
+      "count": 90,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 94,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/joins/SortMergeJoinExec.scala#L94",
+      "fileSha256": "83f9c584f7d155739b6cc99eaee46fcb7ac8cf84cc105f6b2388f7f5fe7a6ac7"
+    },
+    {
+      "id": "spark-broadcast",
+      "repo": "spark",
+      "file": "sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/BroadcastExchangeExec.scala",
+      "needle": "val relationFuture",
+      "count": 100,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 177,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/sql/core/src/main/scala/org/apache/spark/sql/execution/exchange/BroadcastExchangeExec.scala#L177",
+      "fileSha256": "5748fe353dbf24dd214ddd4f9fdb6c0b9cdc83bd32293d0e5cd8e0553b3e8466"
+    },
+    {
+      "id": "comet-broadcast",
+      "repo": "comet",
+      "file": "spark/src/main/scala/org/apache/spark/sql/comet/CometBroadcastExchangeExec.scala",
+      "needle": "val relationFuture",
+      "count": 95,
+      "revision": "184accac5b9cee6b761a6673c73c263adedef45e",
+      "line": 123,
+      "url": "https://github.com/apache/datafusion-comet/blob/786bbc8fd630abfd0b29bdaffea6168f9f228863/spark/src/main/scala/org/apache/spark/sql/comet/CometBroadcastExchangeExec.scala#L123",
+      "fileSha256": "b82ac6a9e53f2b973c55b546bb76ab61f71a023d3c007ed0838ec53419b91503"
+    },
+    {
+      "id": "spark-failure",
+      "repo": "spark",
+      "file": "core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala",
+      "needle": "case FetchFailed(",
+      "count": 80,
+      "revision": "f9358a5587a2d512c5cf08ba4b10d60007c93f6e",
+      "line": 3886,
+      "url": "https://github.com/apache/spark/blob/f9358a5587a2d512c5cf08ba4b10d60007c93f6e/core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala#L3886",
+      "fileSha256": "6a5c04d7dd23d46a1fe28803f0d19cbf247917cc0d46e21dcf1606bc262575b8"
+    }
+  ],
+  "rendered": [
+    {
+      "id": "comet-deep-deployment",
+      "width": 903.10546875,
+      "height": 1271.746826171875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-iceberg",
+      "width": 344,
+      "height": 1227.5,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-boundaries",
+      "width": 1061.625,
+      "height": 905.5,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-jvm-shuffle",
+      "width": 652,
+      "height": 844.4596557617188,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-native-shuffle",
+      "width": 360.34375,
+      "height": 1165.926513671875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-jvm-columnar-shuffle",
+      "width": 569.375,
+      "height": 1158.739501953125,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-network",
+      "width": 970,
+      "height": 783,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-broadcast",
+      "width": 652,
+      "height": 673,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-q3",
+      "width": 714.59375,
+      "height": 988.5,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-aggregate",
+      "width": 652,
+      "height": 843.5,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-recovery",
+      "width": 970,
+      "height": 737,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    },
+    {
+      "id": "comet-deep-join-choice",
+      "width": 799.78515625,
+      "height": 1259.664794921875,
+      "ubuntuLoaded": true,
+      "renderedFont": "Ubuntu, Arial, sans-serif",
+      "labelFonts": [
+        "Ubuntu, Arial, sans-serif"
+      ],
+      "overlaps": [],
+      "textOverlaps": [],
+      "clippedText": []
+    }
+  ],
+  "diagramGeometryPassed": true,
+  "artifactChecks": {
+    "pages": [
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-iceberg-columnar.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-iceberg-columnar.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-shuffle-joins.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-shuffle-joins.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-tpch-plan-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-tpch-plan-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-share-transactions-multi-broker.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-share-transactions-multi-broker.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "reading-paths.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "reading-paths.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-kafka-record-lifecycle.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-kafka-record-lifecycle.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "01-plan-and-deploy.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "01-plan-and-deploy.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-kafka-streams.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-kafka-streams.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "02-records-time-and-backpressure.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "02-records-time-and-backpressure.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "03-kafka-connect.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "03-kafka-connect.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "04-flink-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "04-flink-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "05-spark-structured-streaming.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "05-spark-structured-streaming.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "06-delivery-and-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "06-delivery-and-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "07-code-evidence.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "07-code-evidence.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-iceberg-columnar.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-iceberg-columnar.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-shuffle-joins.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-shuffle-joins.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-spark-native.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-spark-native.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "comet-tpch-plan-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "comet-tpch-plan-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "datafusion-query-engine.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "datafusion-query-engine.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "end-to-end-example.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "end-to-end-example.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-kafka-connector.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-kafka-connector.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "flink-state-checkpoint-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "flink-state-checkpoint-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "iceberg-storage-commits.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "iceberg-storage-commits.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "index.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "index.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-flink-distributed-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-flink-distributed-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-group-share-coordinators.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-group-share-coordinators.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-leadership-metadata.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-leadership-metadata.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-offset-commits-flink-spark.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-offset-commits-flink-spark.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-rpc-atlas.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-rpc-atlas.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-share-transactions-multi-broker.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-share-transactions-multi-broker.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transaction-marker-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transaction-marker-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "kafka-transactions-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "kafka-transactions-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "reading-paths.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "reading-paths.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "rust-arrow-runtime.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "rust-arrow-runtime.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-checkpoint-failure-recovery.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-checkpoint-failure-recovery.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-distributed-execution.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-distributed-execution.html",
+        "fontLoaded": true
+      },
+      {
+        "file": "spark-scheduler-networking.html",
+        "width": 390,
+        "overflow": false,
+        "brokenImages": [],
+        "activeNav": "spark-scheduler-networking.html",
+        "fontLoaded": true
+      }
+    ],
+    "errors": [],
+    "interactions": [
+      {
+        "file": "comet-iceberg-columnar.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "comet-shuffle-joins.html",
+        "width": 1440,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "comet-tpch-plan-atlas.html",
+        "width": 1440,
+        "plans": 88,
+        "queryFilter": true,
+        "deepLinkReveal": true,
+        "expandedVariants": 4
+      },
+      {
+        "file": "comet-iceberg-columnar.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "comet-shuffle-joins.html",
+        "width": 390,
+        "zoom": true,
+        "sourceAnchorExpansion": true
+      },
+      {
+        "file": "comet-tpch-plan-atlas.html",
+        "width": 390,
+        "plans": 88,
+        "queryFilter": true,
+        "deepLinkReveal": true,
+        "expandedVariants": 4
+      }
+    ]
+  },
+  "artifactChecksPassed": true
+}

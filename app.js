@@ -1,3 +1,13 @@
+const readingPathNav = document.createElement('a');
+readingPathNav.href = 'reading-paths.html';
+readingPathNav.dataset.nav = 'reading-paths.html';
+readingPathNav.textContent = 'Reading paths and terms';
+document.querySelector('.sidebar nav')?.prepend(readingPathNav);
+const shareTransactionNav = document.createElement('a');
+shareTransactionNav.href = 'kafka-share-transactions-multi-broker.html';
+shareTransactionNav.dataset.nav = 'kafka-share-transactions-multi-broker.html';
+shareTransactionNav.innerHTML = '<span>27</span>Share transactions across many brokers';
+document.querySelector('.sidebar nav')?.append(shareTransactionNav);
 document.querySelectorAll('[data-nav]').forEach(a=>{if(a.dataset.nav===document.body.dataset.page)a.setAttribute('aria-current','page');});
 document.querySelector('#chapter-filter')?.addEventListener('input',e=>{document.querySelectorAll('[data-nav]').forEach(a=>{a.hidden=!a.textContent.toLowerCase().includes(e.target.value.toLowerCase());});});
 document.querySelectorAll('.diagram-scroll img').forEach(img=>{

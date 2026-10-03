@@ -1,0 +1,23 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":60,"messageMargin":42,"wrap":true,"width":160}}}%%
+flowchart TB
+subgraph MAP["Parallel scan tasks"]
+ A["Scan + filter + partial aggregate
+Task 0"]
+ B["Scan + filter + partial aggregate
+Task 1"]
+end
+subgraph REDUCE["Grouped aggregation"]
+ C["Hash exchange by returnflag / linestatus"] --> D["Merge partial aggregate states"]
+end
+subgraph ORDER["Global ORDER BY"]
+ E["Range exchange"] --> F["Local sort within ranges"]
+end
+A --> C
+B --> C
+D --> E
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef native fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef jvm fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class A,B,C,D,E,F native

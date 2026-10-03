@@ -1,0 +1,128 @@
+== Physical Plan ==
+* CometColumnarToRow (24)
++- CometSort (23)
+   +- CometExchange (22)
+      +- CometHashAggregate (21)
+         +- CometExchange (20)
+            +- CometHashAggregate (19)
+               +- CometHashAggregate (18)
+                  +- CometExchange (17)
+                     +- CometHashAggregate (16)
+                        +- CometProject (15)
+                           +- CometSortMergeJoin (14)
+                              :- CometSort (9)
+                              :  +- CometExchange (8)
+                              :     +- CometBroadcastHashJoin (7)
+                              :        :- CometFilter (2)
+                              :        :  +- CometIcebergNativeScan (1)
+                              :        +- CometBroadcastExchange (6)
+                              :           +- CometProject (5)
+                              :              +- CometFilter (4)
+                              :                 +- CometIcebergNativeScan (3)
+                              +- CometSort (13)
+                                 +- CometExchange (12)
+                                    +- CometFilter (11)
+                                       +- CometIcebergNativeScan (10)
+
+
+(1) CometIcebergNativeScan
+Output [2]: [ps_partkey#92L, ps_suppkey#93L]
+Arguments: [ps_partkey#92L, ps_suppkey#93L], /private/tmp/comet-iceberg-demo/warehouse/tpch/partsupp/metadata/v1.metadata.json, local.tpch.partsupp (branch=null) [filters=ps_partkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Condition : isnotnull(ps_partkey#92L)
+
+(3) CometIcebergNativeScan
+Output [2]: [s_suppkey#108L, s_comment#114]
+Arguments: [s_suppkey#108L, s_comment#114], /private/tmp/comet-iceberg-demo/warehouse/tpch/supplier/metadata/v1.metadata.json, local.tpch.supplier (branch=null) [filters=s_comment IS NOT NULL, groupedBy=], 1
+
+(4) CometFilter
+Input [2]: [s_suppkey#108L, s_comment#114]
+Condition : (isnotnull(s_comment#114) AND s_comment#114 LIKE %Customer%Complaints%)
+
+(5) CometProject
+Input [2]: [s_suppkey#108L, s_comment#114]
+Arguments: [s_suppkey#108L], [s_suppkey#108L]
+
+(6) CometBroadcastExchange
+Input [1]: [s_suppkey#108L]
+Arguments: [s_suppkey#108L]
+
+(7) CometBroadcastHashJoin
+Left output [2]: [ps_partkey#92L, ps_suppkey#93L]
+Right output [1]: [s_suppkey#108L]
+Arguments: [ps_suppkey#93L], [s_suppkey#108L], LeftAnti, BuildRight
+
+(8) CometExchange
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Arguments: hashpartitioning(ps_partkey#92L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=11995]
+
+(9) CometSort
+Input [2]: [ps_partkey#92L, ps_suppkey#93L]
+Arguments: [ps_partkey#92L, ps_suppkey#93L], [ps_partkey#92L ASC NULLS FIRST]
+
+(10) CometIcebergNativeScan
+Output [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: [p_partkey#74L, p_brand#77, p_type#78, p_size#79], /private/tmp/comet-iceberg-demo/warehouse/tpch/part/metadata/v1.metadata.json, local.tpch.part (branch=null) [filters=p_brand IS NOT NULL, p_type IS NOT NULL, NOT (p_brand = 'Brand#14'), NOT (p_type LIKE 'SMALL PLATED%'), p_size IN (14, 6, 5, 31, 49, 15, 41, 47), p_partkey IS NOT NULL, groupedBy=], 1
+
+(11) CometFilter
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Condition : (((((isnotnull(p_brand#77) AND isnotnull(p_type#78)) AND NOT (p_brand#77 = Brand#14)) AND NOT StartsWith(p_type#78, SMALL PLATED)) AND p_size#79 IN (14,6,5,31,49,15,41,47)) AND isnotnull(p_partkey#74L))
+
+(12) CometExchange
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: hashpartitioning(p_partkey#74L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=11999]
+
+(13) CometSort
+Input [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: [p_partkey#74L, p_brand#77, p_type#78, p_size#79], [p_partkey#74L ASC NULLS FIRST]
+
+(14) CometSortMergeJoin
+Left output [2]: [ps_partkey#92L, ps_suppkey#93L]
+Right output [4]: [p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: [ps_partkey#92L], [p_partkey#74L], Inner
+
+(15) CometProject
+Input [6]: [ps_partkey#92L, ps_suppkey#93L, p_partkey#74L, p_brand#77, p_type#78, p_size#79]
+Arguments: [ps_suppkey#93L, p_brand#77, p_type#78, p_size#79], [ps_suppkey#93L, p_brand#77, p_type#78, p_size#79]
+
+(16) CometHashAggregate
+Input [4]: [ps_suppkey#93L, p_brand#77, p_type#78, p_size#79]
+Keys [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Functions: []
+
+(17) CometExchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Arguments: hashpartitioning(p_brand#77, p_type#78, p_size#79, ps_suppkey#93L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=12004]
+
+(18) CometHashAggregate
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Keys [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Functions: []
+
+(19) CometHashAggregate
+Input [4]: [p_brand#77, p_type#78, p_size#79, ps_suppkey#93L]
+Keys [3]: [p_brand#77, p_type#78, p_size#79]
+Functions [1]: [partial_count(distinct ps_suppkey#93L)]
+
+(20) CometExchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, count#1407L]
+Arguments: hashpartitioning(p_brand#77, p_type#78, p_size#79, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=12007]
+
+(21) CometHashAggregate
+Input [4]: [p_brand#77, p_type#78, p_size#79, count#1407L]
+Keys [3]: [p_brand#77, p_type#78, p_size#79]
+Functions [1]: [count(distinct ps_suppkey#93L)]
+
+(22) CometExchange
+Input [4]: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1390L]
+Arguments: rangepartitioning(supplier_cnt#1390L DESC NULLS LAST, p_brand#77 ASC NULLS FIRST, p_type#78 ASC NULLS FIRST, p_size#79 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=12009]
+
+(23) CometSort
+Input [4]: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1390L]
+Arguments: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1390L], [supplier_cnt#1390L DESC NULLS LAST, p_brand#77 ASC NULLS FIRST, p_type#78 ASC NULLS FIRST, p_size#79 ASC NULLS FIRST]
+
+(24) CometColumnarToRow [codegen id : 1]
+Input [4]: [p_brand#77, p_type#78, p_size#79, supplier_cnt#1390L]
+

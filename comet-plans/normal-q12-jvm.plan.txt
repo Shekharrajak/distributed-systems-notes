@@ -1,0 +1,84 @@
+== Physical Plan ==
+* Sort (15)
++- Exchange (14)
+   +- * HashAggregate (13)
+      +- Exchange (12)
+         +- * HashAggregate (11)
+            +- * Project (10)
+               +- * BroadcastHashJoin Inner BuildRight (9)
+                  :- * Filter (3)
+                  :  +- * ColumnarToRow (2)
+                  :     +- BatchScan local.tpch.orders (1)
+                  +- BroadcastExchange (8)
+                     +- * Project (7)
+                        +- * Filter (6)
+                           +- * ColumnarToRow (5)
+                              +- BatchScan local.tpch.lineitem (4)
+
+
+(1) BatchScan local.tpch.orders
+Output [2]: [o_orderkey#56L, o_orderpriority#61]
+local.tpch.orders (branch=null) [filters=o_orderkey IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 2]
+Input [2]: [o_orderkey#56L, o_orderpriority#61]
+
+(3) Filter [codegen id : 2]
+Input [2]: [o_orderkey#56L, o_orderpriority#61]
+Condition : isnotnull(o_orderkey#56L)
+
+(4) BatchScan local.tpch.lineitem
+Output [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+local.tpch.lineitem (branch=null) [filters=l_commitdate IS NOT NULL, l_receiptdate IS NOT NULL, l_shipdate IS NOT NULL, l_shipmode IN ('FOB', 'SHIP'), l_receiptdate >= 9131, l_receiptdate < 9496, l_orderkey IS NOT NULL, groupedBy=]
+
+(5) ColumnarToRow [codegen id : 1]
+Input [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+
+(6) Filter [codegen id : 1]
+Input [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+Condition : (((((((isnotnull(l_commitdate#27) AND isnotnull(l_receiptdate#28)) AND l_shipmode#30 IN (FOB,SHIP)) AND (l_commitdate#27 < l_receiptdate#28)) AND (l_shipdate#26 < l_commitdate#27)) AND (l_receiptdate#28 >= 1995-01-01)) AND (l_receiptdate#28 < 1996-01-01)) AND isnotnull(l_orderkey#16L))
+
+(7) Project [codegen id : 1]
+Output [2]: [l_orderkey#16L, l_shipmode#30]
+Input [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+
+(8) BroadcastExchange
+Input [2]: [l_orderkey#16L, l_shipmode#30]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [plan_id=2693]
+
+(9) BroadcastHashJoin [codegen id : 2]
+Left keys [1]: [o_orderkey#56L]
+Right keys [1]: [l_orderkey#16L]
+Join type: Inner
+Join condition: None
+
+(10) Project [codegen id : 2]
+Output [2]: [o_orderpriority#61, l_shipmode#30]
+Input [4]: [o_orderkey#56L, o_orderpriority#61, l_orderkey#16L, l_shipmode#30]
+
+(11) HashAggregate [codegen id : 2]
+Input [2]: [o_orderpriority#61, l_shipmode#30]
+Keys [1]: [l_shipmode#30]
+Functions [2]: [partial_sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END), partial_sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)]
+Aggregate Attributes [2]: [sum#612L, sum#613L]
+Results [3]: [l_shipmode#30, sum#614L, sum#615L]
+
+(12) Exchange
+Input [3]: [l_shipmode#30, sum#614L, sum#615L]
+Arguments: hashpartitioning(l_shipmode#30, 8), ENSURE_REQUIREMENTS, [plan_id=2699]
+
+(13) HashAggregate [codegen id : 3]
+Input [3]: [l_shipmode#30, sum#614L, sum#615L]
+Keys [1]: [l_shipmode#30]
+Functions [2]: [sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END), sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)]
+Aggregate Attributes [2]: [sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)#600L, sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)#601L]
+Results [3]: [l_shipmode#30, sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)#600L AS high_line_count#598L, sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)#601L AS low_line_count#599L]
+
+(14) Exchange
+Input [3]: [l_shipmode#30, high_line_count#598L, low_line_count#599L]
+Arguments: rangepartitioning(l_shipmode#30 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, [plan_id=2703]
+
+(15) Sort [codegen id : 4]
+Input [3]: [l_shipmode#30, high_line_count#598L, low_line_count#599L]
+Arguments: [l_shipmode#30 ASC NULLS FIRST], true, 0
+

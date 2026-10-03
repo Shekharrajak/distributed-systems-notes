@@ -1,0 +1,75 @@
+== Physical Plan ==
+* CometColumnarToRow (14)
++- CometSort (13)
+   +- CometExchange (12)
+      +- CometHashAggregate (11)
+         +- CometExchange (10)
+            +- CometHashAggregate (9)
+               +- CometProject (8)
+                  +- CometBroadcastHashJoin (7)
+                     :- CometFilter (2)
+                     :  +- CometIcebergNativeScan (1)
+                     +- CometBroadcastExchange (6)
+                        +- CometProject (5)
+                           +- CometFilter (4)
+                              +- CometIcebergNativeScan (3)
+
+
+(1) CometIcebergNativeScan
+Output [2]: [o_orderkey#56L, o_orderpriority#61]
+Arguments: [o_orderkey#56L, o_orderpriority#61], /private/tmp/comet-iceberg-demo/warehouse/tpch/orders/metadata/v2.metadata.json, local.tpch.orders (branch=null) [filters=o_orderkey IS NOT NULL, groupedBy=], 80
+
+(2) CometFilter
+Input [2]: [o_orderkey#56L, o_orderpriority#61]
+Condition : isnotnull(o_orderkey#56L)
+
+(3) CometIcebergNativeScan
+Output [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+Arguments: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_commitdate IS NOT NULL, l_receiptdate IS NOT NULL, l_shipdate IS NOT NULL, l_shipmode IN ('FOB', 'SHIP'), l_receiptdate >= 9131, l_receiptdate < 9496, l_orderkey IS NOT NULL, groupedBy=], 13
+
+(4) CometFilter
+Input [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+Condition : (((((((isnotnull(l_commitdate#27) AND isnotnull(l_receiptdate#28)) AND l_shipmode#30 IN (FOB,SHIP)) AND (l_commitdate#27 < l_receiptdate#28)) AND (l_shipdate#26 < l_commitdate#27)) AND (l_receiptdate#28 >= 1995-01-01)) AND (l_receiptdate#28 < 1996-01-01)) AND isnotnull(l_orderkey#16L))
+
+(5) CometProject
+Input [5]: [l_orderkey#16L, l_shipdate#26, l_commitdate#27, l_receiptdate#28, l_shipmode#30]
+Arguments: [l_orderkey#16L, l_shipmode#30], [l_orderkey#16L, l_shipmode#30]
+
+(6) CometBroadcastExchange
+Input [2]: [l_orderkey#16L, l_shipmode#30]
+Arguments: [l_orderkey#16L, l_shipmode#30]
+
+(7) CometBroadcastHashJoin
+Left output [2]: [o_orderkey#56L, o_orderpriority#61]
+Right output [2]: [l_orderkey#16L, l_shipmode#30]
+Arguments: [o_orderkey#56L], [l_orderkey#16L], Inner, BuildRight
+
+(8) CometProject
+Input [4]: [o_orderkey#56L, o_orderpriority#61, l_orderkey#16L, l_shipmode#30]
+Arguments: [o_orderpriority#61, l_shipmode#30], [o_orderpriority#61, l_shipmode#30]
+
+(9) CometHashAggregate
+Input [2]: [o_orderpriority#61, l_shipmode#30]
+Keys [1]: [l_shipmode#30]
+Functions [2]: [partial_sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END), partial_sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)]
+
+(10) CometExchange
+Input [3]: [l_shipmode#30, sum#521L, sum#522L]
+Arguments: hashpartitioning(l_shipmode#30, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=3604]
+
+(11) CometHashAggregate
+Input [3]: [l_shipmode#30, sum#521L, sum#522L]
+Keys [1]: [l_shipmode#30]
+Functions [2]: [sum(CASE WHEN ((o_orderpriority#61 = 1-URGENT) OR (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END), sum(CASE WHEN (NOT (o_orderpriority#61 = 1-URGENT) AND NOT (o_orderpriority#61 = 2-HIGH)) THEN 1 ELSE 0 END)]
+
+(12) CometExchange
+Input [3]: [l_shipmode#30, high_line_count#505L, low_line_count#506L]
+Arguments: rangepartitioning(l_shipmode#30 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=3606]
+
+(13) CometSort
+Input [3]: [l_shipmode#30, high_line_count#505L, low_line_count#506L]
+Arguments: [l_shipmode#30, high_line_count#505L, low_line_count#506L], [l_shipmode#30 ASC NULLS FIRST]
+
+(14) CometColumnarToRow [codegen id : 1]
+Input [3]: [l_shipmode#30, high_line_count#505L, low_line_count#506L]
+

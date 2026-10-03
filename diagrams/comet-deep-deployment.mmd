@@ -1,0 +1,30 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Ubuntu, Arial, sans-serif","fontSize":"17px","primaryTextColor":"#0f172a","lineColor":"#64748b","actorBkg":"#f1f5f9","actorBorder":"#64748b","actorTextColor":"#0f172a","signalColor":"#475569","signalTextColor":"#0f172a"},"flowchart":{"curve":"basis","htmlLabels":false,"nodeSpacing":48,"rankSpacing":64},"sequence":{"useMaxWidth":false,"actorMargin":60,"messageMargin":42,"wrap":true,"width":160}}}%%
+flowchart TB
+subgraph DRIVER["Driver JVM / control plane"]
+ D["Catalyst + Iceberg planning"] --> P["Comet rewrite + Spark stage scheduling"]
+end
+subgraph E1["Executor JVM 1"]
+ T1["Task threads + Spark shuffle client"] --> N1["JNI / Rust / Arrow / DataFusion"]
+end
+subgraph E2["Executor JVM 2"]
+ T2["Task threads + Spark shuffle client"] --> N2["JNI / Rust / Arrow / DataFusion"]
+end
+subgraph STORAGE["Storage and data transfer"]
+ O[("Iceberg data + delete files")]
+ S[("Local shuffle blocks")]
+end
+P -->|"LaunchTask RPC"| T1
+P -->|"LaunchTask RPC"| T2
+O --> N1
+O --> N2
+N1 --> S
+S -->|"Block fetch"| T2
+classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+classDef native fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+classDef jvm fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef store fill:#f1f5f9,stroke:#64748b,color:#334155
+linkStyle default stroke:#64748b,stroke-width:2px,stroke-linecap:round
+class D,P control
+class T1,T2 jvm
+class N1,N2 native
+class O,S store

@@ -1,0 +1,173 @@
+== Physical Plan ==
+* CometColumnarToRow (33)
++- CometSort (32)
+   +- CometExchange (31)
+      +- CometProject (30)
+         +- CometBroadcastHashJoin (29)
+            :- CometProject (24)
+            :  +- CometBroadcastHashJoin (23)
+            :     :- CometFilter (2)
+            :     :  +- CometIcebergNativeScan (1)
+            :     +- CometBroadcastExchange (22)
+            :        +- CometProject (21)
+            :           +- CometBroadcastHashJoin (20)
+            :              :- CometBroadcastExchange (10)
+            :              :  +- CometBroadcastHashJoin (9)
+            :              :     :- CometFilter (4)
+            :              :     :  +- CometIcebergNativeScan (3)
+            :              :     +- CometBroadcastExchange (8)
+            :              :        +- CometProject (7)
+            :              :           +- CometFilter (6)
+            :              :              +- CometIcebergNativeScan (5)
+            :              +- CometFilter (19)
+            :                 +- CometHashAggregate (18)
+            :                    +- CometExchange (17)
+            :                       +- CometHashAggregate (16)
+            :                          +- CometBroadcastHashJoin (15)
+            :                             :- CometProject (13)
+            :                             :  +- CometFilter (12)
+            :                             :     +- CometIcebergNativeScan (11)
+            :                             +- ReusedExchange (14)
+            +- CometBroadcastExchange (28)
+               +- CometProject (27)
+                  +- CometFilter (26)
+                     +- CometIcebergNativeScan (25)
+
+
+(1) CometIcebergNativeScan
+Output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+Arguments: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L], /private/tmp/comet-iceberg-demo/warehouse/tpch/supplier/metadata/v1.metadata.json, local.tpch.supplier (branch=null) [filters=s_nationkey IS NOT NULL, groupedBy=], 1
+
+(2) CometFilter
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+Condition : isnotnull(s_nationkey#111L)
+
+(3) CometIcebergNativeScan
+Output [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Arguments: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94], /private/tmp/comet-iceberg-demo/warehouse/tpch/partsupp/metadata/v1.metadata.json, local.tpch.partsupp (branch=null) [filters=ps_availqty IS NOT NULL, ps_partkey IS NOT NULL, ps_suppkey IS NOT NULL, groupedBy=], 1
+
+(4) CometFilter
+Input [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Condition : ((isnotnull(ps_availqty#94) AND isnotnull(ps_partkey#92L)) AND isnotnull(ps_suppkey#93L))
+
+(5) CometIcebergNativeScan
+Output [2]: [p_partkey#74L, p_name#75]
+Arguments: [p_partkey#74L, p_name#75], /private/tmp/comet-iceberg-demo/warehouse/tpch/part/metadata/v1.metadata.json, local.tpch.part (branch=null) [filters=p_name IS NOT NULL, p_name LIKE 'blanched%', groupedBy=], 1
+
+(6) CometFilter
+Input [2]: [p_partkey#74L, p_name#75]
+Condition : (isnotnull(p_name#75) AND StartsWith(p_name#75, blanched))
+
+(7) CometProject
+Input [2]: [p_partkey#74L, p_name#75]
+Arguments: [p_partkey#74L], [p_partkey#74L]
+
+(8) CometBroadcastExchange
+Input [1]: [p_partkey#74L]
+Arguments: [p_partkey#74L]
+
+(9) CometBroadcastHashJoin
+Left output [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Right output [1]: [p_partkey#74L]
+Arguments: [ps_partkey#92L], [p_partkey#74L], LeftSemi, BuildRight
+
+(10) CometBroadcastExchange
+Input [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Arguments: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+
+(11) CometIcebergNativeScan
+Output [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+Arguments: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipdate IS NOT NULL, l_shipdate >= 8401, l_shipdate < 8766, groupedBy=], 12
+
+(12) CometFilter
+Input [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+Condition : (isnotnull(l_partkey#17L) AND isnotnull(l_suppkey#18L))
+
+(13) CometProject
+Input [4]: [l_partkey#17L, l_suppkey#18L, l_quantity#20, l_shipdate#26]
+Arguments: [l_partkey#17L, l_suppkey#18L, l_quantity#20], [l_partkey#17L, l_suppkey#18L, l_quantity#20]
+
+(14) ReusedExchange [Reuses operator id: 8]
+Output [1]: [p_partkey#74L]
+
+(15) CometBroadcastHashJoin
+Left output [3]: [l_partkey#17L, l_suppkey#18L, l_quantity#20]
+Right output [1]: [p_partkey#74L]
+Arguments: [l_partkey#17L], [p_partkey#74L], LeftSemi, BuildRight
+
+(16) CometHashAggregate
+Input [3]: [l_partkey#17L, l_suppkey#18L, l_quantity#20]
+Keys [2]: [l_partkey#17L, l_suppkey#18L]
+Functions [1]: [partial_sum(l_quantity#20)]
+
+(17) CometExchange
+Input [4]: [l_partkey#17L, l_suppkey#18L, sum#764, isEmpty#765]
+Arguments: hashpartitioning(l_partkey#17L, l_suppkey#18L, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=5557]
+
+(18) CometHashAggregate
+Input [4]: [l_partkey#17L, l_suppkey#18L, sum#764, isEmpty#765]
+Keys [2]: [l_partkey#17L, l_suppkey#18L]
+Functions [1]: [sum(l_quantity#20)]
+
+(19) CometFilter
+Input [3]: [(0.5 * sum(l_quantity))#744, l_partkey#17L, l_suppkey#18L]
+Condition : isnotnull((0.5 * sum(l_quantity))#744)
+
+(20) CometBroadcastHashJoin
+Left output [3]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94]
+Right output [3]: [(0.5 * sum(l_quantity))#744, l_partkey#17L, l_suppkey#18L]
+Arguments: [ps_partkey#92L, ps_suppkey#93L], [l_partkey#17L, l_suppkey#18L], Inner, (cast(ps_availqty#94 as decimal(24,3)) > (0.5 * sum(l_quantity))#744), BuildLeft
+
+(21) CometProject
+Input [6]: [ps_partkey#92L, ps_suppkey#93L, ps_availqty#94, (0.5 * sum(l_quantity))#744, l_partkey#17L, l_suppkey#18L]
+Arguments: [ps_suppkey#93L], [ps_suppkey#93L]
+
+(22) CometBroadcastExchange
+Input [1]: [ps_suppkey#93L]
+Arguments: [ps_suppkey#93L]
+
+(23) CometBroadcastHashJoin
+Left output [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+Right output [1]: [ps_suppkey#93L]
+Arguments: [s_suppkey#108L], [ps_suppkey#93L], LeftSemi, BuildRight
+
+(24) CometProject
+Input [4]: [s_suppkey#108L, s_name#109, s_address#110, s_nationkey#111L]
+Arguments: [s_name#109, s_address#110, s_nationkey#111L], [s_name#109, s_address#110, s_nationkey#111L]
+
+(25) CometIcebergNativeScan
+Output [2]: [n_nationkey#48L, n_name#49]
+Arguments: [n_nationkey#48L, n_name#49], /private/tmp/comet-iceberg-demo/warehouse/tpch/nation/metadata/v1.metadata.json, local.tpch.nation (branch=null) [filters=n_name IS NOT NULL, n_name = 'KENYA', n_nationkey IS NOT NULL, groupedBy=], 1
+
+(26) CometFilter
+Input [2]: [n_nationkey#48L, n_name#49]
+Condition : ((isnotnull(n_name#49) AND (n_name#49 = KENYA)) AND isnotnull(n_nationkey#48L))
+
+(27) CometProject
+Input [2]: [n_nationkey#48L, n_name#49]
+Arguments: [n_nationkey#48L], [n_nationkey#48L]
+
+(28) CometBroadcastExchange
+Input [1]: [n_nationkey#48L]
+Arguments: [n_nationkey#48L]
+
+(29) CometBroadcastHashJoin
+Left output [3]: [s_name#109, s_address#110, s_nationkey#111L]
+Right output [1]: [n_nationkey#48L]
+Arguments: [s_nationkey#111L], [n_nationkey#48L], Inner, BuildRight
+
+(30) CometProject
+Input [4]: [s_name#109, s_address#110, s_nationkey#111L, n_nationkey#48L]
+Arguments: [s_name#109, s_address#110], [s_name#109, s_address#110]
+
+(31) CometExchange
+Input [2]: [s_name#109, s_address#110]
+Arguments: rangepartitioning(s_name#109 ASC NULLS FIRST, 8), ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=5608]
+
+(32) CometSort
+Input [2]: [s_name#109, s_address#110]
+Arguments: [s_name#109, s_address#110], [s_name#109 ASC NULLS FIRST]
+
+(33) CometColumnarToRow [codegen id : 1]
+Input [2]: [s_name#109, s_address#110]
+

@@ -1,0 +1,4296 @@
+{
+  "runtime": {
+    "spark": "3.5.3",
+    "iceberg": "1.8.1",
+    "comet": "local 1.1.0-SNAPSHOT build; exact source tree not established",
+    "jars": {
+      "comet": {
+        "file": "comet-spark-spark3.5_2.12-1.1.0-SNAPSHOT.jar",
+        "sha256": "af91baf877b73b59f5437d3a40be36fac50efd778375744d8daa2c227c8dfca2"
+      },
+      "iceberg": {
+        "file": "iceberg-spark-runtime-3.5_2.12-1.8.1.jar",
+        "sha256": "a42f6e3f89943ddc67d35738f822396970d0c83d5688c7614099a810aeabf9e0"
+      }
+    }
+  },
+  "launchSettings": {
+    "scope": "Explicit launcher settings, not an exhaustive dump of effective Spark defaults",
+    "driverMemory": "2g",
+    "javaMajor": 17,
+    "catalogType": "hadoop",
+    "comet": {
+      "spark.plugins": "org.apache.spark.CometPlugin",
+      "spark.shuffle.manager": "org.apache.spark.sql.comet.execution.shuffle.CometShuffleManager",
+      "spark.comet.enabled": "true",
+      "spark.comet.exec.enabled": "true",
+      "spark.comet.scan.icebergNative.enabled": "true",
+      "spark.comet.scan.icebergNative.dataFileConcurrencyLimit": "4",
+      "spark.comet.explain.fallback.enabled": "true"
+    },
+    "jvm": {
+      "spark.comet.enabled": "false",
+      "cometJarLoaded": false
+    },
+    "shuffleMode": "not explicitly set; actual CometNativeShuffle exchange arguments are preserved in plans",
+    "forceShuffledHashJoin": "not enabled explicitly"
+  },
+  "queryRevision": "184accac5b9cee6b761a6673c73c263adedef45e",
+  "capturedAt": [
+    "2026-10-03T11:53:43.997048+00:00",
+    "2026-10-03T11:53:52.986771+00:00"
+  ],
+  "snapshots": {
+    "customer": {
+      "table": "local.tpch.customer",
+      "id": "8063135658054984869"
+    },
+    "lineitem": {
+      "table": "local.tpch.lineitem",
+      "id": "5742963690429722330"
+    },
+    "nation": {
+      "table": "local.tpch.nation",
+      "id": "3152193368494141642"
+    },
+    "orders": {
+      "table": "local.tpch.orders",
+      "id": "9212787496283688110"
+    },
+    "part": {
+      "table": "local.tpch.part",
+      "id": "7680285850861420664"
+    },
+    "partsupp": {
+      "table": "local.tpch.partsupp",
+      "id": "8209867678698546432"
+    },
+    "region": {
+      "table": "local.tpch.region",
+      "id": "664155342768328237"
+    },
+    "supplier": {
+      "table": "local.tpch.supplier",
+      "id": "3405590020433592932"
+    }
+  },
+  "config": {
+    "spark.sql.adaptive.enabled": "false",
+    "spark.sql.shuffle.partitions": "8",
+    "spark.memory.offHeap.enabled": "true",
+    "spark.memory.offHeap.size": "2g"
+  },
+  "master": "local[2]",
+  "queryResultsExecuted": false,
+  "q15Adaptation": "Session temporary view replaces persistent CREATE VIEW; SELECT unchanged.",
+  "modes": {
+    "normal": "autoBroadcastJoinThreshold=10485760",
+    "no-broadcast": "autoBroadcastJoinThreshold=-1; semantic special cases can still broadcast"
+  },
+  "captures": [
+    {
+      "key": "normal-q1-jvm",
+      "query": 1,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q1-jvm.plan.txt",
+      "sha256": "f75bbb5586b2c7508fa18a360c01c027a10e21b7e54e79a0b8648f69e1c749a3",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_returnflag",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_linestatus",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "sum_qty",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_base_price",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_disc_price",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_charge",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_qty",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_price",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_disc",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "count_order",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 1,
+        "Filter": 1,
+        "Project": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q2-jvm",
+      "query": 2,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q2-jvm.plan.txt",
+      "sha256": "e0be38bde71f88acf6a847f98984938f6a6ab9bbdb6aad415110465821b97df1",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "p_mfgr",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 8,
+        "Filter": 9,
+        "Project": 10,
+        "BroadcastExchange": 6,
+        "BatchScan local.tpch.partsupp": 2,
+        "BroadcastHashJoin": 7,
+        "Exchange": 3,
+        "Sort": 2,
+        "BatchScan local.tpch.supplier": 2,
+        "BatchScan local.tpch.nation": 2,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2,
+        "SortMergeJoin": 1,
+        "ReusedExchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "normal-q3-jvm",
+      "query": 3,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q3-jvm.plan.txt",
+      "sha256": "8c396d692b8169d70dfa2a46fb7d8536796ef0dc7761a1512d4a80fc0a4e6e65",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_shippriority",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "Project": 4,
+        "BroadcastExchange": 2,
+        "BatchScan local.tpch.orders": 1,
+        "BroadcastHashJoin": 2,
+        "BatchScan local.tpch.lineitem": 1,
+        "HashAggregate": 2,
+        "Exchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "normal-q4-jvm",
+      "query": 4,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q4-jvm.plan.txt",
+      "sha256": "4cc733509af5492022081f065c1cbc9eefcd4355337bdf4be8220a13a02c3f72",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_orderpriority",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "order_count",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.orders": 1,
+        "ColumnarToRow": 2,
+        "Project": 3,
+        "BatchScan local.tpch.lineitem": 1,
+        "Filter": 1,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q5-jvm",
+      "query": 5,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q5-jvm.plan.txt",
+      "sha256": "fa716debf2060724d27be73cbf93c7fd8b750a903e29fb1e85d6dc111ed59ed0",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "BroadcastExchange": 5,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 7,
+        "BroadcastHashJoin": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.nation": 1,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q6-jvm",
+      "query": 6,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q6-jvm.plan.txt",
+      "sha256": "fb439636b4a4de1858358199920d4f1c98c7f8103ba4f9ff646b5ab932f5a613",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(35,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 1,
+        "Filter": 1,
+        "Project": 1,
+        "HashAggregate": 2,
+        "Exchange": 1
+      }
+    },
+    {
+      "key": "normal-q7-jvm",
+      "query": 7,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q7-jvm.plan.txt",
+      "sha256": "a1215ca2b65d08b1aedecf251a0bd1f6fe53e0a3609996f26ab8dfd182edf825",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "supp_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "cust_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "BroadcastExchange": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "BroadcastHashJoin": 5,
+        "Project": 5,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.customer": 1,
+        "BatchScan local.tpch.nation": 2,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q8-jvm",
+      "query": 8,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q8-jvm.plan.txt",
+      "sha256": "5fe4256b60bc4ce2a62ad2784c32c3de2c916dbedd46e2f4dc32e06d8ead8d89",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "mkt_share",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 8,
+        "Filter": 8,
+        "Project": 9,
+        "BroadcastExchange": 7,
+        "BatchScan local.tpch.lineitem": 1,
+        "BroadcastHashJoin": 7,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.customer": 1,
+        "BatchScan local.tpch.nation": 2,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q9-jvm",
+      "query": 9,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q9-jvm.plan.txt",
+      "sha256": "306ece4947f0a0c92ec1fe3aca6a585e825170d3a8558e4403d23404d7053ced",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "sum_profit",
+            "nullable": true,
+            "type": "decimal(37,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "Project": 6,
+        "BroadcastExchange": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "BroadcastHashJoin": 5,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.partsupp": 1,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q10-jvm",
+      "query": 10,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q10-jvm.plan.txt",
+      "sha256": "d8f4ca01a46b5c0f29b732c1e9fcd88b29977f451e12db7a0528cc7ac4f4d286",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "c_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 4,
+        "Filter": 4,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 5,
+        "BroadcastExchange": 3,
+        "BroadcastHashJoin": 3,
+        "BatchScan local.tpch.lineitem": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2,
+        "Exchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "normal-q11-jvm",
+      "query": 11,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q11-jvm.plan.txt",
+      "sha256": "98ac8237b3ad86f95677bd11b02784a4274f44b06bbc22170ae95f2c7a54b97b",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "ps_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "value",
+            "nullable": true,
+            "type": "decimal(33,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.partsupp": 2,
+        "ColumnarToRow": 4,
+        "Filter": 5,
+        "BatchScan local.tpch.supplier": 1,
+        "BroadcastExchange": 2,
+        "BroadcastHashJoin": 4,
+        "Project": 5,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 4,
+        "Exchange": 3,
+        "Sort": 1,
+        "ReusedExchange": 2
+      }
+    },
+    {
+      "key": "normal-q12-jvm",
+      "query": 12,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q12-jvm.plan.txt",
+      "sha256": "09dc4ee7da00d76df470a318807d318e3f3f645763d97f1ce49385b1ef0d0270",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_shipmode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "high_line_count",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "low_line_count",
+            "nullable": true,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.orders": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "BatchScan local.tpch.lineitem": 1,
+        "Project": 2,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q13-jvm",
+      "query": 13,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q13-jvm.plan.txt",
+      "sha256": "67e3bc37a0e7a0f1866d7c9f1ae725ab9e60f569b8fd60229eac737d931a255b",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "c_count",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "custdist",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 2,
+        "BatchScan local.tpch.orders": 1,
+        "Filter": 1,
+        "Project": 2,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 4,
+        "Exchange": 3,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q14-jvm",
+      "query": 14,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q14-jvm.plan.txt",
+      "sha256": "5cec9714c04da1b5a9646777bb67f5bea8979e446e8927ad7b89fbc631c1b67a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "promo_revenue",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "Project": 2,
+        "BroadcastExchange": 1,
+        "BatchScan local.tpch.part": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 2,
+        "Exchange": 1
+      }
+    },
+    {
+      "key": "normal-q15-jvm",
+      "query": 15,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q15-jvm.plan.txt",
+      "sha256": "416f4bc0acc1b0f89e0507883479bd4af9852eaf0e67072faaa3e30ebd41664c",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_suppkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "total_revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "BroadcastExchange": 1,
+        "BatchScan local.tpch.lineitem": 2,
+        "Project": 4,
+        "HashAggregate": 6,
+        "Exchange": 4,
+        "BroadcastHashJoin": 1,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q16-jvm",
+      "query": 16,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q16-jvm.plan.txt",
+      "sha256": "d8a41d8d17cc79189b2208a318b7806e29982f91bcb85d7e6867b65755a4e34a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "p_brand",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_type",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_size",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "supplier_cnt",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.partsupp": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "BatchScan local.tpch.supplier": 1,
+        "Project": 2,
+        "BroadcastExchange": 2,
+        "BroadcastHashJoin": 2,
+        "BatchScan local.tpch.part": 1,
+        "HashAggregate": 4,
+        "Exchange": 3,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q17-jvm",
+      "query": 17,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q17-jvm.plan.txt",
+      "sha256": "27f21d9da49eca2baacd228c137cbd666ea646db160390f5827173c978706918",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "avg_yearly",
+            "nullable": true,
+            "type": "decimal(27,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 2,
+        "ColumnarToRow": 3,
+        "Filter": 4,
+        "BatchScan local.tpch.part": 1,
+        "Project": 3,
+        "BroadcastExchange": 2,
+        "BroadcastHashJoin": 2,
+        "HashAggregate": 4,
+        "Exchange": 2
+      }
+    },
+    {
+      "key": "normal-q18-jvm",
+      "query": 18,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q18-jvm.plan.txt",
+      "sha256": "330f0c7a3292cacfac2bf21acd52650dcc1010536525e5d24b1f94a47df399b6",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_totalprice",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "sum(l_quantity)",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 4,
+        "Filter": 4,
+        "BroadcastExchange": 3,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.lineitem": 2,
+        "HashAggregate": 4,
+        "Exchange": 2,
+        "Project": 3,
+        "BroadcastHashJoin": 4,
+        "ReusedExchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "normal-q19-jvm",
+      "query": 19,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q19-jvm.plan.txt",
+      "sha256": "daa259c51d0854d34537072e5789ff6bd133611657368c19cef001c1ba8d6a10",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "Project": 2,
+        "BatchScan local.tpch.part": 1,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 2,
+        "Exchange": 1
+      }
+    },
+    {
+      "key": "normal-q20-jvm",
+      "query": 20,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q20-jvm.plan.txt",
+      "sha256": "439b80905ea5c81e3a5e415b934e2fd39938f6c367ef810dbb815dc5451c02d5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 5,
+        "Filter": 6,
+        "BatchScan local.tpch.partsupp": 1,
+        "BatchScan local.tpch.part": 1,
+        "Project": 6,
+        "BroadcastExchange": 4,
+        "BroadcastHashJoin": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "ReusedExchange": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "BatchScan local.tpch.nation": 1,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "normal-q21-jvm",
+      "query": 21,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q21-jvm.plan.txt",
+      "sha256": "41ccf6e0bd7fbcb9d28a5a83f768196d67b17c06f04cf94e39ed894dc4ba0db5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numwait",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 6,
+        "Filter": 5,
+        "BroadcastExchange": 5,
+        "BatchScan local.tpch.lineitem": 3,
+        "Project": 8,
+        "BroadcastHashJoin": 5,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2,
+        "Exchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "normal-q22-jvm",
+      "query": 22,
+      "engine": "jvm",
+      "mode": "normal",
+      "file": "normal-q22-jvm.plan.txt",
+      "sha256": "7bc9051b9ec9d3d1dfe3522fd0061a6ad9d6002e3a1ca3acd59914b61d9e762a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "cntrycode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numcust",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "totacctbal",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 2,
+        "ColumnarToRow": 3,
+        "Filter": 2,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 3,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "HashAggregate": 4,
+        "Exchange": 3,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q1-jvm",
+      "query": 1,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q1-jvm.plan.txt",
+      "sha256": "e0c2cddf0d59827e5f0aed457f4204bb17cff78df95c456d3f69394de803b355",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_returnflag",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_linestatus",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "sum_qty",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_base_price",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_disc_price",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_charge",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_qty",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_price",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_disc",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "count_order",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 1,
+        "Filter": 1,
+        "Project": 1,
+        "HashAggregate": 2,
+        "Exchange": 2,
+        "Sort": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q2-jvm",
+      "query": 2,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q2-jvm.plan.txt",
+      "sha256": "d8f2a73246d9ec0dd943b6fd0c73967eaddb28a9f57b3ee2e956663de197bdce",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "p_mfgr",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 8,
+        "Filter": 9,
+        "Project": 10,
+        "Exchange": 16,
+        "Sort": 16,
+        "BatchScan local.tpch.partsupp": 2,
+        "SortMergeJoin": 8,
+        "BatchScan local.tpch.supplier": 2,
+        "BatchScan local.tpch.nation": 2,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2,
+        "ReusedExchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q3-jvm",
+      "query": 3,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q3-jvm.plan.txt",
+      "sha256": "df029a6d99dc271f396335191c5ce39940badbfc611d61ee916fdca5fd885259",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_shippriority",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "Project": 4,
+        "Exchange": 4,
+        "Sort": 4,
+        "BatchScan local.tpch.orders": 1,
+        "SortMergeJoin": 2,
+        "BatchScan local.tpch.lineitem": 1,
+        "HashAggregate": 2,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q4-jvm",
+      "query": 4,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q4-jvm.plan.txt",
+      "sha256": "680bb226ccc3aab67cc62a442a5c77d8b9205236b4de55f20a3f762d2a4ffa76",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_orderpriority",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "order_count",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.orders": 1,
+        "ColumnarToRow": 2,
+        "Project": 3,
+        "Exchange": 4,
+        "Sort": 3,
+        "BatchScan local.tpch.lineitem": 1,
+        "Filter": 1,
+        "SortMergeJoin": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q5-jvm",
+      "query": 5,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q5-jvm.plan.txt",
+      "sha256": "017ba4bf9a6677e947c04ff755ba65bfaaf425ded3ae218ee178189a9b23cdce",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "Exchange": 12,
+        "Sort": 11,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 7,
+        "SortMergeJoin": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.nation": 1,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q6-jvm",
+      "query": 6,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q6-jvm.plan.txt",
+      "sha256": "1cfea27ece0e7042236d01712de329eb67c9140f7b22856c7f25816f542b6180",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(35,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 1,
+        "Filter": 1,
+        "Project": 1,
+        "HashAggregate": 2,
+        "Exchange": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q7-jvm",
+      "query": 7,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q7-jvm.plan.txt",
+      "sha256": "1cb64c14ece84356e709004b1de2d5526b5467d73702cdb926cd7edc8ca897a6",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "supp_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "cust_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "Exchange": 12,
+        "Sort": 11,
+        "BatchScan local.tpch.lineitem": 1,
+        "SortMergeJoin": 5,
+        "Project": 5,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.customer": 1,
+        "BatchScan local.tpch.nation": 2,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q8-jvm",
+      "query": 8,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q8-jvm.plan.txt",
+      "sha256": "11417c6ad00a18809f9b4586a6777a3a1c3514831fa0e71a59646166f73afcf7",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "mkt_share",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 8,
+        "Filter": 8,
+        "Project": 9,
+        "Exchange": 16,
+        "Sort": 15,
+        "BatchScan local.tpch.lineitem": 1,
+        "SortMergeJoin": 7,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.customer": 1,
+        "BatchScan local.tpch.nation": 2,
+        "BatchScan local.tpch.region": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q9-jvm",
+      "query": 9,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q9-jvm.plan.txt",
+      "sha256": "6fb9c84634c66b46d120626e3bbe856c03aa0151a74c8bb2189dba61d1d77fae",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "sum_profit",
+            "nullable": true,
+            "type": "decimal(37,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.part": 1,
+        "ColumnarToRow": 6,
+        "Filter": 6,
+        "Project": 6,
+        "Exchange": 12,
+        "Sort": 11,
+        "BatchScan local.tpch.lineitem": 1,
+        "SortMergeJoin": 5,
+        "BatchScan local.tpch.supplier": 1,
+        "BatchScan local.tpch.partsupp": 1,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q10-jvm",
+      "query": 10,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q10-jvm.plan.txt",
+      "sha256": "68b16dde9a5a3863b2c93fa2dbf0c682947ee16c2e76b35cf85aef277fc8d142",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "c_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 4,
+        "Filter": 4,
+        "Exchange": 7,
+        "Sort": 6,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 5,
+        "SortMergeJoin": 3,
+        "BatchScan local.tpch.lineitem": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q11-jvm",
+      "query": 11,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q11-jvm.plan.txt",
+      "sha256": "2f556a792d3f8656fad84b52e5706169b8ac575a11abd67f160d483abb8f3dc9",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "ps_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "value",
+            "nullable": true,
+            "type": "decimal(33,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.partsupp": 2,
+        "ColumnarToRow": 4,
+        "Filter": 5,
+        "Exchange": 9,
+        "Sort": 9,
+        "BatchScan local.tpch.supplier": 1,
+        "SortMergeJoin": 4,
+        "Project": 5,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 4,
+        "ReusedExchange": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q12-jvm",
+      "query": 12,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q12-jvm.plan.txt",
+      "sha256": "04de19f6ade68f4825b5c6399acaf293f696a038cc2bd654acbad29e0d03449a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_shipmode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "high_line_count",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "low_line_count",
+            "nullable": true,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.orders": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "Exchange": 4,
+        "Sort": 3,
+        "BatchScan local.tpch.lineitem": 1,
+        "Project": 2,
+        "SortMergeJoin": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q13-jvm",
+      "query": 13,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q13-jvm.plan.txt",
+      "sha256": "72e5a664375cbe474d1fb391a56d4d923af1b8aa784b52723c1a3dfe6ea40168",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "c_count",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "custdist",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 2,
+        "Exchange": 4,
+        "Sort": 3,
+        "BatchScan local.tpch.orders": 1,
+        "Filter": 1,
+        "Project": 2,
+        "SortMergeJoin": 1,
+        "HashAggregate": 4
+      }
+    },
+    {
+      "key": "no-broadcast-q14-jvm",
+      "query": 14,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q14-jvm.plan.txt",
+      "sha256": "dee56ba7e80fb2267f961c69a5bb7c08036163b5414de37c0505f0072e66a781",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "promo_revenue",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "Project": 2,
+        "Exchange": 3,
+        "Sort": 2,
+        "BatchScan local.tpch.part": 1,
+        "SortMergeJoin": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q15-jvm",
+      "query": 15,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q15-jvm.plan.txt",
+      "sha256": "5a55ed648f9750cecb0184236d286362c83efcd43a86f65a476553baccb8eba4",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_suppkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "total_revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "Exchange": 5,
+        "Sort": 3,
+        "BatchScan local.tpch.lineitem": 2,
+        "Project": 4,
+        "HashAggregate": 6,
+        "SortMergeJoin": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q16-jvm",
+      "query": 16,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q16-jvm.plan.txt",
+      "sha256": "14e57522bf753bbca816a300d660b25979b70325e1e0c90f834db13b1f717465",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "p_brand",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_type",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_size",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "supplier_cnt",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.partsupp": 1,
+        "ColumnarToRow": 3,
+        "Filter": 3,
+        "BatchScan local.tpch.supplier": 1,
+        "Project": 2,
+        "BroadcastExchange": 1,
+        "BroadcastHashJoin": 1,
+        "Exchange": 5,
+        "Sort": 3,
+        "BatchScan local.tpch.part": 1,
+        "SortMergeJoin": 1,
+        "HashAggregate": 4
+      }
+    },
+    {
+      "key": "no-broadcast-q17-jvm",
+      "query": 17,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q17-jvm.plan.txt",
+      "sha256": "b3ac0f0bdf55d6cd71adad2b4f8895ce79a164205602aa2a510a8a62e6380357",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "avg_yearly",
+            "nullable": true,
+            "type": "decimal(27,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 2,
+        "ColumnarToRow": 3,
+        "Filter": 4,
+        "Exchange": 4,
+        "Sort": 3,
+        "BatchScan local.tpch.part": 1,
+        "Project": 3,
+        "SortMergeJoin": 2,
+        "HashAggregate": 4
+      }
+    },
+    {
+      "key": "no-broadcast-q18-jvm",
+      "query": 18,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q18-jvm.plan.txt",
+      "sha256": "996279398e642fd18091c831bfa9eb8cf05274858cf95f7355f851cb315c65d7",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_totalprice",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "sum(l_quantity)",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 1,
+        "ColumnarToRow": 4,
+        "Filter": 5,
+        "Exchange": 6,
+        "Sort": 7,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.lineitem": 2,
+        "HashAggregate": 5,
+        "Project": 4,
+        "SortMergeJoin": 4,
+        "ReusedExchange": 1,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q19-jvm",
+      "query": 19,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q19-jvm.plan.txt",
+      "sha256": "3f4e8abb94a34081fa070787a9dc59c9f3fb3b968d1fcc4946c9c6e74dbac42a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.lineitem": 1,
+        "ColumnarToRow": 2,
+        "Filter": 2,
+        "Project": 2,
+        "Exchange": 3,
+        "Sort": 2,
+        "BatchScan local.tpch.part": 1,
+        "SortMergeJoin": 1,
+        "HashAggregate": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q20-jvm",
+      "query": 20,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q20-jvm.plan.txt",
+      "sha256": "828dd8e6e663311dc6da837cb098c8ea9444343b8c066e828d7dd711c973cef5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 5,
+        "Filter": 6,
+        "Exchange": 10,
+        "Sort": 11,
+        "BatchScan local.tpch.partsupp": 1,
+        "BatchScan local.tpch.part": 1,
+        "Project": 6,
+        "SortMergeJoin": 5,
+        "BatchScan local.tpch.lineitem": 1,
+        "ReusedExchange": 1,
+        "HashAggregate": 2,
+        "BatchScan local.tpch.nation": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q21-jvm",
+      "query": 21,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q21-jvm.plan.txt",
+      "sha256": "4412e96f11464cc93a2119272c27dbc16a3f42981c7e6e270ff43e89a63d6f42",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numwait",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.supplier": 1,
+        "ColumnarToRow": 6,
+        "Filter": 5,
+        "Exchange": 10,
+        "Sort": 9,
+        "BatchScan local.tpch.lineitem": 3,
+        "Project": 8,
+        "SortMergeJoin": 5,
+        "BatchScan local.tpch.orders": 1,
+        "BatchScan local.tpch.nation": 1,
+        "HashAggregate": 2,
+        "TakeOrderedAndProject": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q22-jvm",
+      "query": 22,
+      "engine": "jvm",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q22-jvm.plan.txt",
+      "sha256": "05f6bbf8ad77e8dd4d8df8fd5a548b5f33bed7c13d08493cd866b2123a3299f5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "cntrycode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numcust",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "totacctbal",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "BatchScan local.tpch.customer": 2,
+        "ColumnarToRow": 3,
+        "Filter": 2,
+        "Exchange": 5,
+        "Sort": 3,
+        "BatchScan local.tpch.orders": 1,
+        "Project": 3,
+        "SortMergeJoin": 1,
+        "HashAggregate": 4
+      }
+    },
+    {
+      "key": "normal-q1-comet",
+      "query": 1,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q1-comet.plan.txt",
+      "sha256": "9f6f3afafa4ec47f95096fee46f539cf902f5675d1897272097456a1fc877a44",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_returnflag",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_linestatus",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "sum_qty",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_base_price",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_disc_price",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_charge",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_qty",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_price",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_disc",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "count_order",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 1,
+        "CometFilter": 1,
+        "CometProject": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q2-comet",
+      "query": 2,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q2-comet.plan.txt",
+      "sha256": "a3dd461b05f65a44dcf9467fafbd55308d1b3e17cb4762ef0e4abba9628c3390",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "p_mfgr",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 8,
+        "CometFilter": 9,
+        "CometProject": 10,
+        "CometBroadcastExchange": 6,
+        "CometBroadcastHashJoin": 7,
+        "CometExchange": 3,
+        "CometSort": 2,
+        "CometHashAggregate": 2,
+        "CometSortMergeJoin": 1,
+        "ReusedExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q3-comet",
+      "query": 3,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q3-comet.plan.txt",
+      "sha256": "89223e11055cda3183f1354fd1057f8bd8fad149ec9ddeaf8b92eedd2c8ba36c",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_shippriority",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometProject": 4,
+        "CometBroadcastExchange": 2,
+        "CometBroadcastHashJoin": 2,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q4-comet",
+      "query": 4,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q4-comet.plan.txt",
+      "sha256": "8b1506f72dd190d035deb0058f2c38ec860e56ac1e848ff4c358d9f55b42bb50",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_orderpriority",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "order_count",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometProject": 3,
+        "CometFilter": 1,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q5-comet",
+      "query": 5,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q5-comet.plan.txt",
+      "sha256": "12ce610512a0d108bdd6fc66d219ad3f82c0cd159d46ecf5a7e9a350a5f035b1",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometBroadcastExchange": 5,
+        "CometProject": 7,
+        "CometBroadcastHashJoin": 5,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q6-comet",
+      "query": 6,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q6-comet.plan.txt",
+      "sha256": "3753b33463a8b7b0a8426766f96d37d37c429f732e178216d94fb4cb43e6b979",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(35,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 1,
+        "CometFilter": 1,
+        "CometProject": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q7-comet",
+      "query": 7,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q7-comet.plan.txt",
+      "sha256": "fbeabe1b41859bcadf3e472946eb5c39f413bdba5ba4b12e0504e0de2e9fbfe8",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "supp_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "cust_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometBroadcastExchange": 5,
+        "CometBroadcastHashJoin": 5,
+        "CometProject": 5,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q8-comet",
+      "query": 8,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q8-comet.plan.txt",
+      "sha256": "0b2a56f652fadc36f6465403eda24370da472e73aeba89f39cccc0cbcd44e451",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "mkt_share",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 8,
+        "CometFilter": 8,
+        "CometProject": 9,
+        "CometBroadcastExchange": 7,
+        "CometBroadcastHashJoin": 7,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q9-comet",
+      "query": 9,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q9-comet.plan.txt",
+      "sha256": "d112117334a295ed674da3c8018cd84eab0096e3ead83f252584d1527fbc61dd",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "sum_profit",
+            "nullable": true,
+            "type": "decimal(37,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometProject": 6,
+        "CometBroadcastExchange": 5,
+        "CometBroadcastHashJoin": 5,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q10-comet",
+      "query": 10,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q10-comet.plan.txt",
+      "sha256": "e9440f0912db80c5e287118f03cfd7ed6fcd5671ad32042fc20db1aa3e54aed2",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "c_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 4,
+        "CometProject": 5,
+        "CometBroadcastExchange": 3,
+        "CometBroadcastHashJoin": 3,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q11-comet",
+      "query": 11,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q11-comet.plan.txt",
+      "sha256": "7989d339a968149449de54f3435df324120b470ee107d55aad1ee5237e1d2b99",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "ps_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "value",
+            "nullable": true,
+            "type": "decimal(33,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 5,
+        "CometBroadcastExchange": 2,
+        "CometBroadcastHashJoin": 4,
+        "CometProject": 5,
+        "CometHashAggregate": 4,
+        "CometExchange": 3,
+        "CometSort": 1,
+        "CometColumnarToRow": 2,
+        "ReusedExchange": 2
+      }
+    },
+    {
+      "key": "normal-q12-comet",
+      "query": 12,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q12-comet.plan.txt",
+      "sha256": "950bbf26cedfed07d87df7d8156539c23147304cdd385ea9d0f9caa0bf11a9f5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_shipmode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "high_line_count",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "low_line_count",
+            "nullable": true,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometProject": 2,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q13-comet",
+      "query": 13,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q13-comet.plan.txt",
+      "sha256": "cb509e43874d7941f3087aea225415cdd36ba0b4d17731ca6f930c6bdb7b2872",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "c_count",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "custdist",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 1,
+        "CometProject": 2,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 4,
+        "CometExchange": 3,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q14-comet",
+      "query": 14,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q14-comet.plan.txt",
+      "sha256": "c888c27b6c3251141580c8fdaa58a3b471ec10783ed89b64668d8d9e8dffd803",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "promo_revenue",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometProject": 2,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q15-comet",
+      "query": 15,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q15-comet.plan.txt",
+      "sha256": "57d338564a6c8d9f8da73ec3e64bb8ddb57868965a7d06aa821f0905c182eb4b",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_suppkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "total_revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometBroadcastExchange": 1,
+        "CometProject": 4,
+        "CometHashAggregate": 6,
+        "CometExchange": 4,
+        "CometBroadcastHashJoin": 1,
+        "CometSort": 1,
+        "CometColumnarToRow": 2
+      }
+    },
+    {
+      "key": "normal-q16-comet",
+      "query": 16,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q16-comet.plan.txt",
+      "sha256": "e76762a151b456b3c4877cc377702bef83c7cf51bacdc3ec1a6d9e74c89ae8a4",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "p_brand",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_type",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_size",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "supplier_cnt",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometProject": 2,
+        "CometBroadcastExchange": 2,
+        "CometBroadcastHashJoin": 2,
+        "CometHashAggregate": 4,
+        "CometExchange": 3,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q17-comet",
+      "query": 17,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q17-comet.plan.txt",
+      "sha256": "a9592d7a5c050d140dd47ea00e8ae0babba423494028fce6fa0d5b7b616e0e0f",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "avg_yearly",
+            "nullable": true,
+            "type": "decimal(27,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 4,
+        "CometProject": 3,
+        "CometBroadcastExchange": 2,
+        "CometBroadcastHashJoin": 2,
+        "CometHashAggregate": 4,
+        "CometExchange": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q18-comet",
+      "query": 18,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q18-comet.plan.txt",
+      "sha256": "33e8126fb4d2ccfa29b73a2e39b2a663c81ff475c5b5818bc8c32f5400a93623",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_totalprice",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "sum(l_quantity)",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 4,
+        "CometBroadcastExchange": 3,
+        "CometHashAggregate": 4,
+        "CometExchange": 2,
+        "CometProject": 3,
+        "CometBroadcastHashJoin": 4,
+        "ReusedExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q19-comet",
+      "query": 19,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q19-comet.plan.txt",
+      "sha256": "4d3d8368a0851fb911324c9aa55cdb4f0e93919be8cfd75139242003d696c1ee",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometProject": 2,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q20-comet",
+      "query": 20,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q20-comet.plan.txt",
+      "sha256": "2fa83410897d77d031df95bd3ca6fa8e1635c2892fd6dcf9dab84fb46842d4b4",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 5,
+        "CometFilter": 6,
+        "CometProject": 6,
+        "CometBroadcastExchange": 4,
+        "CometBroadcastHashJoin": 5,
+        "ReusedExchange": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q21-comet",
+      "query": 21,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q21-comet.plan.txt",
+      "sha256": "6405476c834eb96f29667391f4d46bba381cb1a475fb46511aae1cdcf5e88679",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numwait",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 5,
+        "CometBroadcastExchange": 5,
+        "CometProject": 8,
+        "CometBroadcastHashJoin": 5,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "normal-q22-comet",
+      "query": 22,
+      "engine": "comet",
+      "mode": "normal",
+      "file": "normal-q22-comet.plan.txt",
+      "sha256": "3bfff33090e98d0ad517ddab01024086932dca6a292cba55eb12877eb93829c6",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "cntrycode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numcust",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "totacctbal",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 2,
+        "CometProject": 3,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometHashAggregate": 4,
+        "CometExchange": 3,
+        "CometSort": 1,
+        "CometColumnarToRow": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q1-comet",
+      "query": 1,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q1-comet.plan.txt",
+      "sha256": "d4eb99549e8a546616358f3146840c9cb211277359e227aa3853d2b84ad7f6d5",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_returnflag",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_linestatus",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "sum_qty",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_base_price",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_disc_price",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "sum_charge",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_qty",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_price",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "avg_disc",
+            "nullable": true,
+            "type": "decimal(16,6)"
+          },
+          {
+            "metadata": {},
+            "name": "count_order",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 1,
+        "CometFilter": 1,
+        "CometProject": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 2,
+        "CometSort": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q2-comet",
+      "query": 2,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q2-comet.plan.txt",
+      "sha256": "6307f5fa33c9e0ed83365af8bc5b0f13249d1298fd9944ab17000a397a51b20e",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "p_mfgr",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 8,
+        "CometFilter": 9,
+        "CometProject": 10,
+        "CometExchange": 16,
+        "CometSort": 16,
+        "CometSortMergeJoin": 8,
+        "CometHashAggregate": 2,
+        "ReusedExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q3-comet",
+      "query": 3,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q3-comet.plan.txt",
+      "sha256": "16029ec1224f9292cd8a6a78cc8d7be42e3009cd42b631b32f1286e8ae721cb4",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_shippriority",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometProject": 4,
+        "CometExchange": 4,
+        "CometSort": 4,
+        "CometSortMergeJoin": 2,
+        "CometHashAggregate": 2,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q4-comet",
+      "query": 4,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q4-comet.plan.txt",
+      "sha256": "21ef092b61dff830b31481b440cf43e7c1cef2594026f2f48734f4865603299f",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_orderpriority",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "order_count",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometProject": 3,
+        "CometExchange": 4,
+        "CometSort": 3,
+        "CometFilter": 1,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q5-comet",
+      "query": 5,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q5-comet.plan.txt",
+      "sha256": "6f179406cd6db92fec60091a94fd7951e619cba6af745788907ccc627009381c",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometExchange": 12,
+        "CometSort": 11,
+        "CometProject": 7,
+        "CometSortMergeJoin": 5,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q6-comet",
+      "query": 6,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q6-comet.plan.txt",
+      "sha256": "dc9ec40dc0ca3da1c680b2cf24fc34348e15a4d946a25ce058adccdbe56dcaf4",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(35,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 1,
+        "CometFilter": 1,
+        "CometProject": 1,
+        "CometHashAggregate": 2,
+        "CometExchange": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q7-comet",
+      "query": 7,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q7-comet.plan.txt",
+      "sha256": "ca009c38942eb178788f236e369dd03d9f29884ba789824ca0d80b0bd7183c53",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "supp_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "cust_nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "l_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometExchange": 12,
+        "CometSort": 11,
+        "CometSortMergeJoin": 5,
+        "CometProject": 5,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q8-comet",
+      "query": 8,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q8-comet.plan.txt",
+      "sha256": "b108296da6dfdeb8f3bcc558367ca7e2b4c7213634752fdb87c1b8fa5c708761",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "mkt_share",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 8,
+        "CometFilter": 8,
+        "CometProject": 9,
+        "CometExchange": 16,
+        "CometSort": 15,
+        "CometSortMergeJoin": 7,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q9-comet",
+      "query": 9,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q9-comet.plan.txt",
+      "sha256": "7aa3f4dbd41ecd209c01d4c965285695c67180b1370b524b3e1490247735cad3",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "nation",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "o_year",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "sum_profit",
+            "nullable": true,
+            "type": "decimal(37,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 6,
+        "CometProject": 6,
+        "CometExchange": 12,
+        "CometSort": 11,
+        "CometSortMergeJoin": 5,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q10-comet",
+      "query": 10,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q10-comet.plan.txt",
+      "sha256": "7ae93b74ff0227e69ab4ccb0612567ee4352f8487a7723b37e8b73005b772138",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          },
+          {
+            "metadata": {},
+            "name": "c_acctbal",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {},
+            "name": "n_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_comment",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 4,
+        "CometExchange": 7,
+        "CometSort": 6,
+        "CometProject": 5,
+        "CometSortMergeJoin": 3,
+        "CometHashAggregate": 2,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q11-comet",
+      "query": 11,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q11-comet.plan.txt",
+      "sha256": "def33bd05013f3d78dcfcb6af7d52e9ac9303e9f751080af55913e929f31182d",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "ps_partkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "value",
+            "nullable": true,
+            "type": "decimal(33,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 5,
+        "CometExchange": 9,
+        "CometSort": 9,
+        "CometSortMergeJoin": 4,
+        "CometProject": 5,
+        "CometHashAggregate": 4,
+        "CometColumnarToRow": 2,
+        "ReusedExchange": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q12-comet",
+      "query": 12,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q12-comet.plan.txt",
+      "sha256": "a87611987cd95247954b8ee863223e7858f2681639fb7257ea5438a664b3042c",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "l_shipmode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "high_line_count",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "low_line_count",
+            "nullable": true,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometExchange": 4,
+        "CometSort": 3,
+        "CometProject": 2,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q13-comet",
+      "query": 13,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q13-comet.plan.txt",
+      "sha256": "387067ccc35c89aec18c3f6f9c44d8803121d0ac2a1e213edf22e351a3adbd55",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "c_count",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "custdist",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometExchange": 4,
+        "CometSort": 3,
+        "CometFilter": 1,
+        "CometProject": 2,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 4,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q14-comet",
+      "query": 14,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q14-comet.plan.txt",
+      "sha256": "315b5c0bbf30aaa5e2667f6f6219f3718f71d2358900da93901ca2fe0c76d3a7",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "promo_revenue",
+            "nullable": true,
+            "type": "decimal(38,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometProject": 2,
+        "CometExchange": 3,
+        "CometSort": 2,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q15-comet",
+      "query": 15,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q15-comet.plan.txt",
+      "sha256": "25c0ee93c760079a1aa6ee6eaa2614a13c3ab4b2b6afd37c968ad1df63f20124",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_suppkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_phone",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "total_revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometExchange": 5,
+        "CometSort": 3,
+        "CometProject": 4,
+        "CometHashAggregate": 6,
+        "CometSortMergeJoin": 1,
+        "CometColumnarToRow": 2
+      }
+    },
+    {
+      "key": "no-broadcast-q16-comet",
+      "query": 16,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q16-comet.plan.txt",
+      "sha256": "62add7860bd4f5eaa5d8e7fcd182a5b7416eb56824e8cef2a79c7841d890c927",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "p_brand",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_type",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "p_size",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "metadata": {},
+            "name": "supplier_cnt",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 3,
+        "CometProject": 2,
+        "CometBroadcastExchange": 1,
+        "CometBroadcastHashJoin": 1,
+        "CometExchange": 5,
+        "CometSort": 3,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 4,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q17-comet",
+      "query": 17,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q17-comet.plan.txt",
+      "sha256": "d29c3abde16170498569858941d30a7f0b30fd58867d671166b66bb394facf2e",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "avg_yearly",
+            "nullable": true,
+            "type": "decimal(27,6)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 4,
+        "CometExchange": 4,
+        "CometSort": 3,
+        "CometProject": 3,
+        "CometSortMergeJoin": 2,
+        "CometHashAggregate": 4,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q18-comet",
+      "query": 18,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q18-comet.plan.txt",
+      "sha256": "f55d9798dbd69bb619961794be55640bd7b1eeb558efef48ed701e29836d1623",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "c_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "c_custkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderkey",
+            "nullable": true,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "o_orderdate",
+            "nullable": true,
+            "type": "date"
+          },
+          {
+            "metadata": {},
+            "name": "o_totalprice",
+            "nullable": true,
+            "type": "decimal(12,2)"
+          },
+          {
+            "metadata": {
+              "__autoGeneratedAlias": "true"
+            },
+            "name": "sum(l_quantity)",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 4,
+        "CometFilter": 5,
+        "CometExchange": 6,
+        "CometSort": 7,
+        "CometHashAggregate": 5,
+        "CometProject": 4,
+        "CometSortMergeJoin": 4,
+        "ReusedExchange": 1,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q19-comet",
+      "query": 19,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q19-comet.plan.txt",
+      "sha256": "3a606e48f805d0745f9b905ddaa7bb88fb295772228f5ee1f7a4ab58e99d7282",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "revenue",
+            "nullable": true,
+            "type": "decimal(36,4)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 2,
+        "CometFilter": 2,
+        "CometProject": 2,
+        "CometExchange": 3,
+        "CometSort": 2,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q20-comet",
+      "query": 20,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q20-comet.plan.txt",
+      "sha256": "6edb35bc123f01a1d4bc6971fd04653065ba1d74615a48c5c9a63b204260b5ca",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "s_address",
+            "nullable": true,
+            "type": "string"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 5,
+        "CometFilter": 6,
+        "CometExchange": 10,
+        "CometSort": 11,
+        "CometProject": 6,
+        "CometSortMergeJoin": 5,
+        "ReusedExchange": 1,
+        "CometHashAggregate": 2,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q21-comet",
+      "query": 21,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q21-comet.plan.txt",
+      "sha256": "935260b932f10c64e9ef0d07160a4ab258e86c9d4feaf4960e7f0352264aaa2a",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "s_name",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numwait",
+            "nullable": false,
+            "type": "long"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 6,
+        "CometFilter": 5,
+        "CometExchange": 10,
+        "CometSort": 9,
+        "CometProject": 8,
+        "CometSortMergeJoin": 5,
+        "CometHashAggregate": 2,
+        "CometTakeOrderedAndProject": 1,
+        "CometColumnarToRow": 1
+      }
+    },
+    {
+      "key": "no-broadcast-q22-comet",
+      "query": 22,
+      "engine": "comet",
+      "mode": "no-broadcast",
+      "file": "no-broadcast-q22-comet.plan.txt",
+      "sha256": "47a231f9b9957f85ba302d1c8081f71adefb856814b11a53ff01bac69efb351d",
+      "schema": {
+        "fields": [
+          {
+            "metadata": {},
+            "name": "cntrycode",
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "metadata": {},
+            "name": "numcust",
+            "nullable": false,
+            "type": "long"
+          },
+          {
+            "metadata": {},
+            "name": "totacctbal",
+            "nullable": true,
+            "type": "decimal(22,2)"
+          }
+        ],
+        "type": "struct"
+      },
+      "jobIdsDuringPlanning": [],
+      "status": "planned",
+      "operators": {
+        "CometIcebergNativeScan": 3,
+        "CometFilter": 2,
+        "CometExchange": 5,
+        "CometSort": 3,
+        "CometProject": 3,
+        "CometSortMergeJoin": 1,
+        "CometHashAggregate": 4,
+        "CometColumnarToRow": 2
+      }
+    }
+  ]
+}

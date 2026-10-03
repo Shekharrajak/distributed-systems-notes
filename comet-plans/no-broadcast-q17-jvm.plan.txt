@@ -1,0 +1,146 @@
+== Physical Plan ==
+* HashAggregate (26)
++- Exchange (25)
+   +- * HashAggregate (24)
+      +- * Project (23)
+         +- * SortMergeJoin Inner (22)
+            :- * Project (13)
+            :  +- * SortMergeJoin Inner (12)
+            :     :- * Sort (5)
+            :     :  +- Exchange (4)
+            :     :     +- * Filter (3)
+            :     :        +- * ColumnarToRow (2)
+            :     :           +- BatchScan local.tpch.lineitem (1)
+            :     +- * Sort (11)
+            :        +- Exchange (10)
+            :           +- * Project (9)
+            :              +- * Filter (8)
+            :                 +- * ColumnarToRow (7)
+            :                    +- BatchScan local.tpch.part (6)
+            +- * Sort (21)
+               +- * Filter (20)
+                  +- * HashAggregate (19)
+                     +- Exchange (18)
+                        +- * HashAggregate (17)
+                           +- * Filter (16)
+                              +- * ColumnarToRow (15)
+                                 +- BatchScan local.tpch.lineitem (14)
+
+
+(1) BatchScan local.tpch.lineitem
+Output [3]: [l_partkey#17L, l_quantity#20, l_extendedprice#21]
+local.tpch.lineitem (branch=null) [filters=l_partkey IS NOT NULL, l_quantity IS NOT NULL, groupedBy=]
+
+(2) ColumnarToRow [codegen id : 1]
+Input [3]: [l_partkey#17L, l_quantity#20, l_extendedprice#21]
+
+(3) Filter [codegen id : 1]
+Input [3]: [l_partkey#17L, l_quantity#20, l_extendedprice#21]
+Condition : (isnotnull(l_partkey#17L) AND isnotnull(l_quantity#20))
+
+(4) Exchange
+Input [3]: [l_partkey#17L, l_quantity#20, l_extendedprice#21]
+Arguments: hashpartitioning(l_partkey#17L, 8), ENSURE_REQUIREMENTS, [plan_id=9317]
+
+(5) Sort [codegen id : 2]
+Input [3]: [l_partkey#17L, l_quantity#20, l_extendedprice#21]
+Arguments: [l_partkey#17L ASC NULLS FIRST], false, 0
+
+(6) BatchScan local.tpch.part
+Output [3]: [p_partkey#74L, p_brand#77, p_container#80]
+local.tpch.part (branch=null) [filters=p_brand IS NOT NULL, p_container IS NOT NULL, p_brand = 'Brand#42', p_container = 'LG BAG', p_partkey IS NOT NULL, groupedBy=]
+
+(7) ColumnarToRow [codegen id : 3]
+Input [3]: [p_partkey#74L, p_brand#77, p_container#80]
+
+(8) Filter [codegen id : 3]
+Input [3]: [p_partkey#74L, p_brand#77, p_container#80]
+Condition : ((((isnotnull(p_brand#77) AND isnotnull(p_container#80)) AND (p_brand#77 = Brand#42)) AND (p_container#80 = LG BAG)) AND isnotnull(p_partkey#74L))
+
+(9) Project [codegen id : 3]
+Output [1]: [p_partkey#74L]
+Input [3]: [p_partkey#74L, p_brand#77, p_container#80]
+
+(10) Exchange
+Input [1]: [p_partkey#74L]
+Arguments: hashpartitioning(p_partkey#74L, 8), ENSURE_REQUIREMENTS, [plan_id=9327]
+
+(11) Sort [codegen id : 4]
+Input [1]: [p_partkey#74L]
+Arguments: [p_partkey#74L ASC NULLS FIRST], false, 0
+
+(12) SortMergeJoin [codegen id : 5]
+Left keys [1]: [l_partkey#17L]
+Right keys [1]: [p_partkey#74L]
+Join type: Inner
+Join condition: None
+
+(13) Project [codegen id : 5]
+Output [3]: [l_quantity#20, l_extendedprice#21, p_partkey#74L]
+Input [4]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, p_partkey#74L]
+
+(14) BatchScan local.tpch.lineitem
+Output [2]: [l_partkey#1702L, l_quantity#1705]
+local.tpch.lineitem (branch=null) [filters=, groupedBy=]
+
+(15) ColumnarToRow [codegen id : 6]
+Input [2]: [l_partkey#1702L, l_quantity#1705]
+
+(16) Filter [codegen id : 6]
+Input [2]: [l_partkey#1702L, l_quantity#1705]
+Condition : isnotnull(l_partkey#1702L)
+
+(17) HashAggregate [codegen id : 6]
+Input [2]: [l_partkey#1702L, l_quantity#1705]
+Keys [1]: [l_partkey#1702L]
+Functions [1]: [partial_avg(l_quantity#1705)]
+Aggregate Attributes [2]: [sum#1722, count#1721L]
+Results [3]: [l_partkey#1702L, sum#1735, count#1736L]
+
+(18) Exchange
+Input [3]: [l_partkey#1702L, sum#1735, count#1736L]
+Arguments: hashpartitioning(l_partkey#1702L, 8), ENSURE_REQUIREMENTS, [plan_id=9341]
+
+(19) HashAggregate [codegen id : 7]
+Input [3]: [l_partkey#1702L, sum#1735, count#1736L]
+Keys [1]: [l_partkey#1702L]
+Functions [1]: [avg(l_quantity#1705)]
+Aggregate Attributes [1]: [avg(l_quantity#1705)#1699]
+Results [2]: [(0.2 * avg(l_quantity#1705)#1699) AS (0.2 * avg(l_quantity))#1700, l_partkey#1702L]
+
+(20) Filter [codegen id : 7]
+Input [2]: [(0.2 * avg(l_quantity))#1700, l_partkey#1702L]
+Condition : isnotnull((0.2 * avg(l_quantity))#1700)
+
+(21) Sort [codegen id : 7]
+Input [2]: [(0.2 * avg(l_quantity))#1700, l_partkey#1702L]
+Arguments: [l_partkey#1702L ASC NULLS FIRST], false, 0
+
+(22) SortMergeJoin [codegen id : 8]
+Left keys [1]: [p_partkey#74L]
+Right keys [1]: [l_partkey#1702L]
+Join type: Inner
+Join condition: (cast(l_quantity#20 as decimal(18,7)) < (0.2 * avg(l_quantity))#1700)
+
+(23) Project [codegen id : 8]
+Output [1]: [l_extendedprice#21]
+Input [5]: [l_quantity#20, l_extendedprice#21, p_partkey#74L, (0.2 * avg(l_quantity))#1700, l_partkey#1702L]
+
+(24) HashAggregate [codegen id : 8]
+Input [1]: [l_extendedprice#21]
+Keys: []
+Functions [1]: [partial_sum(l_extendedprice#21)]
+Aggregate Attributes [2]: [sum#1731, isEmpty#1732]
+Results [2]: [sum#1733, isEmpty#1734]
+
+(25) Exchange
+Input [2]: [sum#1733, isEmpty#1734]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=9352]
+
+(26) HashAggregate [codegen id : 9]
+Input [2]: [sum#1733, isEmpty#1734]
+Keys: []
+Functions [1]: [sum(l_extendedprice#21)]
+Aggregate Attributes [1]: [sum(l_extendedprice#21)#1717]
+Results [1]: [(sum(l_extendedprice#21)#1717 / 7.0) AS avg_yearly#1697]
+

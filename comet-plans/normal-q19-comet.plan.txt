@@ -1,0 +1,65 @@
+== Physical Plan ==
+* CometColumnarToRow (12)
++- CometHashAggregate (11)
+   +- CometExchange (10)
+      +- CometHashAggregate (9)
+         +- CometProject (8)
+            +- CometBroadcastHashJoin (7)
+               :- CometProject (3)
+               :  +- CometFilter (2)
+               :     +- CometIcebergNativeScan (1)
+               +- CometBroadcastExchange (6)
+                  +- CometFilter (5)
+                     +- CometIcebergNativeScan (4)
+
+
+(1) CometIcebergNativeScan
+Output [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+Arguments: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30], /private/tmp/comet-iceberg-demo/warehouse/tpch/lineitem/metadata/v2.metadata.json, local.tpch.lineitem (branch=null) [filters=l_shipinstruct IS NOT NULL, l_shipmode IN ('AIR', 'AIR REG'), l_shipinstruct = 'DELIVER IN PERSON', l_partkey IS NOT NULL, (((l_quantity >= 8.00 AND l_quantity <= 18.00) OR (l_quantity >= 20.00 AND l_quantity <= 30.00)) OR (l_quantity >= 30.00 AND l_quantity <= 40.00)), groupedBy=], 83
+
+(2) CometFilter
+Input [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+Condition : ((((isnotnull(l_shipinstruct#29) AND l_shipmode#30 IN (AIR,AIR REG)) AND (l_shipinstruct#29 = DELIVER IN PERSON)) AND isnotnull(l_partkey#17L)) AND ((((l_quantity#20 >= 8.00) AND (l_quantity#20 <= 18.00)) OR ((l_quantity#20 >= 20.00) AND (l_quantity#20 <= 30.00))) OR ((l_quantity#20 >= 30.00) AND (l_quantity#20 <= 40.00))))
+
+(3) CometProject
+Input [6]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, l_shipinstruct#29, l_shipmode#30]
+Arguments: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22], [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22]
+
+(4) CometIcebergNativeScan
+Output [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Arguments: [p_partkey#74L, p_brand#77, p_size#79, p_container#80], /private/tmp/comet-iceberg-demo/warehouse/tpch/part/metadata/v1.metadata.json, local.tpch.part (branch=null) [filters=p_size IS NOT NULL, p_size >= 1, p_partkey IS NOT NULL, ((((p_brand = 'Brand#21' AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')) AND p_size <= 5) OR ((p_brand = 'Brand#13' AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')) AND p_size <= 10)) OR ((p_brand = 'Brand#52' AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')) AND p_size <= 15)), groupedBy=], 1
+
+(5) CometFilter
+Input [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Condition : (((isnotnull(p_size#79) AND (p_size#79 >= 1)) AND isnotnull(p_partkey#74L)) AND (((((p_brand#77 = Brand#21) AND p_container#80 IN (SM CASE,SM BOX,SM PACK,SM PKG)) AND (p_size#79 <= 5)) OR (((p_brand#77 = Brand#13) AND p_container#80 IN (MED BAG,MED BOX,MED PKG,MED PACK)) AND (p_size#79 <= 10))) OR (((p_brand#77 = Brand#52) AND p_container#80 IN (LG CASE,LG BOX,LG PACK,LG PKG)) AND (p_size#79 <= 15))))
+
+(6) CometBroadcastExchange
+Input [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Arguments: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+
+(7) CometBroadcastHashJoin
+Left output [4]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22]
+Right output [4]: [p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Arguments: [l_partkey#17L], [p_partkey#74L], Inner, (((((((p_brand#77 = Brand#21) AND p_container#80 IN (SM CASE,SM BOX,SM PACK,SM PKG)) AND (l_quantity#20 >= 8.00)) AND (l_quantity#20 <= 18.00)) AND (p_size#79 <= 5)) OR (((((p_brand#77 = Brand#13) AND p_container#80 IN (MED BAG,MED BOX,MED PKG,MED PACK)) AND (l_quantity#20 >= 20.00)) AND (l_quantity#20 <= 30.00)) AND (p_size#79 <= 10))) OR (((((p_brand#77 = Brand#52) AND p_container#80 IN (LG CASE,LG BOX,LG PACK,LG PKG)) AND (l_quantity#20 >= 30.00)) AND (l_quantity#20 <= 40.00)) AND (p_size#79 <= 15))), BuildRight
+
+(8) CometProject
+Input [8]: [l_partkey#17L, l_quantity#20, l_extendedprice#21, l_discount#22, p_partkey#74L, p_brand#77, p_size#79, p_container#80]
+Arguments: [l_extendedprice#21, l_discount#22], [l_extendedprice#21, l_discount#22]
+
+(9) CometHashAggregate
+Input [2]: [l_extendedprice#21, l_discount#22]
+Keys: []
+Functions [1]: [partial_sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(10) CometExchange
+Input [2]: [sum#738, isEmpty#739]
+Arguments: SinglePartition, ENSURE_REQUIREMENTS, CometNativeShuffle, [plan_id=5189]
+
+(11) CometHashAggregate
+Input [2]: [sum#738, isEmpty#739]
+Keys: []
+Functions [1]: [sum((l_extendedprice#21 * (1 - l_discount#22)))]
+
+(12) CometColumnarToRow [codegen id : 1]
+Input [1]: [revenue#723]
+
